@@ -1,0 +1,22 @@
+[Unit]
+Description=Retro-RAG Nextcloud PostgreSQL Synchronisation
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+User=nina
+Group=nina
+
+WorkingDirectory=/home/nina/projects/retro-rag
+
+EnvironmentFile=/home/nina/.config/retro-rag/credentials.env
+
+ExecStart=/home/nina/projects/retro-rag/.venv/bin/python /home/nina/projects/retro-rag/scripts/import_pg.py --url http://127.0.0.1:8080 --user nina --folder Retro-Computing --apply
+
+TimeoutStartSec=300
+
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=true

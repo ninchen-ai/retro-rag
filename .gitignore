@@ -1,0 +1,31 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Zugangsdaten
+.env
+.env.*
+*.env
+credentials*
+*secret*
+*.pem
+*.key
+
+# Laufzeitdaten
+logs/
+*.log
+*.dump
+*.sql.gz
+*.tar.gz
+*.zip
+tmp/
+backups/
+
+# Editor
+.vscode/
+.idea/
+
+# Betriebssystem
+.DS_Store

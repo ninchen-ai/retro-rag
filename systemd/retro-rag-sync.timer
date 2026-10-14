@@ -1,0 +1,12 @@
+[Unit]
+Description=Retro-RAG automatische Synchronisierung
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=15min
+AccuracySec=1min
+Persistent=false
+Unit=retro-rag-sync.service
+
+[Install]
+WantedBy=timers.target

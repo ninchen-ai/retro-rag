@@ -13,8 +13,9 @@ WorkingDirectory=/home/nina/projects/retro-rag
 EnvironmentFile=/home/nina/.config/retro-rag/credentials.env
 
 ExecStart=/home/nina/projects/retro-rag/.venv/bin/python /home/nina/projects/retro-rag/scripts/import_pg.py --url http://127.0.0.1:8080 --user nina --folder Retro-Computing --apply
+ExecStart=/home/nina/projects/retro-rag/.venv/bin/python /home/nina/projects/retro-rag/scripts/index_embeddings.py --apply
 
-TimeoutStartSec=300
+TimeoutStartSec=1800
 
 StandardOutput=journal
 StandardError=journal

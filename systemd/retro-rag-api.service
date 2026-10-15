@@ -1,0 +1,29 @@
+[Unit]
+Description=Retro-RAG OpenAI-compatible API
+Documentation=https://github.com/ninchen-ai/retro-rag
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=simple
+User=nina
+Group=nina
+WorkingDirectory=/home/nina/projects/retro-rag
+
+EnvironmentFile=/home/nina/.config/retro-rag/credentials.env
+EnvironmentFile=/home/nina/.config/retro-rag/api.env
+
+ExecStart=/home/nina/projects/retro-rag/.venv/bin/python -m uvicorn api.server:app --host 172.19.0.1 --port 8765 --workers 1
+
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=60
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

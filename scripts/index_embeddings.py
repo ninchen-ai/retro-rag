@@ -99,8 +99,18 @@ def main():
     with psycopg.connect(host='127.0.0.1', port=5432, dbname='retro_rag', user='retro_rag_ingest',
                          password=pgpassword, connect_timeout=10) as conn:
         with conn.cursor() as cur:
-            cur.execute('''SELECT id, document_key, nextcloud_path, content_sha256, origin
-                           FROM knowledge.document ORDER BY id''')
+            cur.execute(r'''
+    SELECT id, document_key, nextcloud_path, content_sha256, origin
+    FROM knowledge.document
+    WHERE document_kind IN (
+        'hardware_model',
+        'inventory_item',
+        'system',
+        'reference'
+    )
+    AND nextcloud_path ~* '\.md$'
+    ORDER BY id
+''')
             documents = cur.fetchall()
         for doc_id, key, path, expected_sha, origin in documents:
             if origin not in ('own', 'approved_external'):

@@ -1,0 +1,15 @@
+[Unit]
+Description=Retro-RAG API Firewall
+Wants=docker.service
+After=docker.service
+Before=retro-rag-api.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=-/usr/sbin/nft delete table inet retro_rag
+ExecStart=/usr/sbin/nft -f /etc/nftables.d/retro-rag.nft
+ExecStop=/usr/sbin/nft delete table inet retro_rag
+
+[Install]
+WantedBy=multi-user.target

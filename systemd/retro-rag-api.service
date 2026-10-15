@@ -3,6 +3,8 @@ Description=Retro-RAG OpenAI-compatible API
 Documentation=https://github.com/ninchen-ai/retro-rag
 Wants=network-online.target docker.service
 After=network-online.target docker.service
+Requires=retro-rag-firewall.service
+After=retro-rag-firewall.service
 
 [Service]
 Type=simple

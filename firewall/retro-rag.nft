@@ -1,0 +1,9 @@
+table inet retro_rag {
+    chain input {
+        type filter hook input priority -10; policy accept;
+
+        ip daddr 172.19.0.1 tcp dport 8765 \
+            iifname != "br-fc57a4e654bd" \
+            iifname != "lo" drop
+    }
+}

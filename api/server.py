@@ -113,10 +113,29 @@ def generate_answer(question: str) -> tuple[str, dict[str, int]]:
     answer = strip_model_source_section(answer)
     # Only documents actually returned by the vector retrieval are listed.
     # Retrieval is not proof that each document supported the final claim.
-    keys = list(dict.fromkeys(row[0] for row in passages))
-    if keys:
-        answer += "\n\nAbgerufene Dokumente (Suchkontext):\n" + "\n".join(
-            f"- `{key}`" for key in keys
+    sources = {}
+
+    for key, title, index, content, score, page_start, page_end in passages:
+        if key not in sources:
+            sources[key] = set()
+
+        if page_start is not None:
+            end = page_end if page_end is not None else page_start
+            sources[key].update(range(page_start, end + 1))
+
+    if sources:
+        source_lines = []
+
+        for key, pages in sources.items():
+            if pages:
+                page_list = ", ".join(str(p) for p in sorted(pages))
+                source_lines.append(f"- `{key}` — PDF-Seite(n): {page_list}")
+            else:
+                source_lines.append(f"- `{key}`")
+
+        answer += (
+            "\n\nAbgerufene Dokumente (Suchkontext):\n"
+            + "\n".join(source_lines)
         )
     else:
         answer += "\n\nAbgerufene Dokumente (Suchkontext): Keine"

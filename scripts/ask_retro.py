@@ -59,7 +59,8 @@ def retrieve(question, password, top_k):
             inventory = cur.fetchall()
             cur.execute('''
                 SELECT d.document_key, d.title, c.chunk_index, c.content,
-                       1 - (c.embedding <=> %s::vector) AS similarity
+                        1 - (c.embedding <=> %s::vector) AS similarity,
+                        c.page_start, c.page_end
                 FROM rag.chunk AS c
                 JOIN knowledge.document AS d ON d.id = c.document_id
                 WHERE c.embedding_model = 'nomic-embed-text'
@@ -79,8 +80,18 @@ def format_context(inventory, passages):
     else:
         lines.append('- Keine aktiven Systemkomponenten dokumentiert.')
     lines.append('\nDOKUMENTAUSZÜGE (semantische Suche):')
-    for key, title, index, content, score in passages:
-        lines.append(f'\n[Quelle: {key} | Abschnitt {index} | Titel: {title} | Ähnlichkeit {score:.3f}]')
+    for key, title, index, content, score, page_start, page_end in passages:
+        page_info = ''
+        if page_start is not None:
+            if page_end is not None and page_end != page_start:
+                page_info = f' | PDF-Seiten {page_start}–{page_end}'
+            else:
+                page_info = f' | PDF-Seite {page_start}'
+
+        lines.append(
+            f'\n[Quelle: {key} | Abschnitt {index} | Titel: {title}'
+            f'{page_info} | Ähnlichkeit {score:.3f}]'
+        )
         lines.append(content[:6000])
     if not passages:
         lines.append('Keine Dokumentauszüge gefunden.')

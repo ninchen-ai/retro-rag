@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Retro-RAG PDF discovery via Nextcloud WebDAV. Read-only."""
+"""Nextcloud-PDF-Synchronisierung mit vorsichtiger Lebenszyklusverwaltung."""
 
 import argparse
 import base64
@@ -134,7 +134,7 @@ def discover(url, user, password, folder):
 
     return sorted(files, key=lambda f: f["path"])
 
-def check_webdav_path(base, path, user, password):
+def check_webdav_path(base, path, user, password, expected_file_id=None, return_status=False,):
     """Prüft einen gespeicherten WebDAV-Pfad ohne Datei-Download."""
 
     parsed = urlsplit(base)
@@ -159,7 +159,12 @@ def check_webdav_path(base, path, user, password):
 
     request = Request(
         base.rstrip("/") + encoded_path,
-        data=b'<d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>',
+        data=(
+            b'<d:propfind xmlns:d="DAV:" '
+            b'xmlns:oc="http://owncloud.org/ns">'
+            b'<d:prop><d:resourcetype/><oc:fileid/></d:prop>'
+            b'</d:propfind>'
+        ),
         headers={
             "Authorization": "Basic " + auth,
             "Depth": "0",
@@ -174,11 +179,33 @@ def check_webdav_path(base, path, user, password):
                 raise RuntimeError(
                     f"Unerwartete WebDAV-Antwort: HTTP {response.status}"
                 )
-            return True
+
+            xml = ET.fromstring(response.read())
+
+            if xml.tag != "{DAV:}multistatus":
+                raise RuntimeError("Ungültige WebDAV-Antwort")
+
+            responses = xml.findall("d:response", DAV)
+            if len(responses) != 1:
+                raise RuntimeError("Unerwartete Anzahl WebDAV-Dateiantworten")
+
+            file_id = responses[0].findtext(".//oc:fileid", namespaces=DAV)
+            if not file_id:
+                raise RuntimeError("Nextcloud-Datei-ID fehlt")
+
+            if (
+                expected_file_id is not None
+                and file_id.strip() != str(expected_file_id)
+            ):
+                status = "MISMATCH"
+            else:
+                status = "MATCH"
+
+            return status if return_status else status == "MATCH"
 
     except HTTPError as exc:
         if exc.code == 404:
-            return False
+            return "MISSING" if return_status else False
         raise
 
 def get_known_pdfs(password):
@@ -222,6 +249,7 @@ def get_known_pdfs(password):
         return {
             str(file_id): {
                 "id": document_id,
+                "fileid": str(file_id),
                 "is_active": is_active,
                 "document_key": key,
                 "path": path,
@@ -302,6 +330,258 @@ def clear_missing_pdf(document_id, password):
                 WHERE document_id = %s
             """, (document_id,))
 
+def update_missing_lifecycle(document_id, password, dry_run=True):
+    """Verarbeitet eine bestätigte Abwesenheit atomar."""
+
+    with psycopg.connect(
+        host="127.0.0.1",
+        port=5432,
+        dbname="retro_rag",
+        user="retro_rag_ingest",
+        password=password,
+        connect_timeout=10,
+    ) as conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT is_active
+                    FROM knowledge.document
+                    WHERE id = %s
+                    FOR UPDATE
+                """, (document_id,))
+
+                row = cur.fetchone()
+                if row is None:
+                    raise RuntimeError("Dokument nicht gefunden")
+
+                is_active = row[0]
+
+                cur.execute("""
+                    SELECT
+                        first_missing_at,
+                        now() AS checked_at
+                    FROM knowledge.pdf_missing_state
+                    WHERE document_id = %s
+                """, (document_id,))
+
+                missing = cur.fetchone()
+
+                if not is_active:
+                    result = "ALREADY_INACTIVE"
+
+                elif missing is None:
+                    cur.execute("""
+                        INSERT INTO knowledge.pdf_missing_state (
+                            document_id,
+                            first_missing_at,
+                            last_checked_at
+                        )
+                        VALUES (%s, now(), now())
+                    """, (document_id,))
+                    result = "PENDING"
+
+                else:
+                    first_missing_at, checked_at = missing
+
+                    if checked_at - first_missing_at < timedelta(minutes=10):
+                        cur.execute("""
+                            UPDATE knowledge.pdf_missing_state
+                            SET last_checked_at = now()
+                            WHERE document_id = %s
+                        """, (document_id,))
+                        result = "WAITING"
+                    else:
+                        cur.execute("""
+                            UPDATE knowledge.pdf_missing_state
+                            SET last_checked_at = now()
+                            WHERE document_id = %s
+                        """, (document_id,))
+
+                        cur.execute("""
+                            UPDATE knowledge.document
+                            SET is_active = false
+                            WHERE id = %s
+                              AND is_active = true
+                        """, (document_id,))
+
+                        result = "DEACTIVATED"
+
+            if dry_run:
+                conn.rollback()
+            else:
+                conn.commit()
+
+            return result
+
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def validate_pdf_index(document_id, password):
+    """Prüft PDF-Metadaten und eine lückenlose Embedding-Sequenz."""
+
+    with psycopg.connect(
+        host="127.0.0.1",
+        port=5432,
+        dbname="retro_rag",
+        user="retro_rag_reader",
+        password=password,
+        connect_timeout=10,
+        options="-c default_transaction_read_only=on",
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    pm.page_count,
+                    COUNT(c.id),
+                    MIN(c.chunk_index),
+                    MAX(c.chunk_index)
+                FROM knowledge.pdf_metadata pm
+                LEFT JOIN rag.chunk c
+                    ON c.document_id = pm.document_id
+                   AND c.embedding_model = 'nomic-embed-text'
+                WHERE pm.document_id = %s
+                GROUP BY pm.page_count
+            """, (document_id,))
+
+            row = cur.fetchone()
+            if row is None:
+                return False
+
+            page_count, chunk_count, first_index, last_index = row
+
+            return (
+                page_count > 0
+                and chunk_count > 0
+                and first_index == 0
+                and last_index == chunk_count - 1
+            )
+
+def pdf_metadata_matches(item, existing):
+    """Vergleicht die aktuelle Nextcloud-PDF mit ihrem DB-Synchronisierungsstand."""
+
+    if existing is None:
+        return False
+
+    return (
+        str(item["fileid"]) == str(existing.get("fileid"))
+        and unquote(item["path"]) == unquote(existing["path"])
+        and bool(existing["etag"])
+        and item["etag"] == existing["etag"]
+        and item["size"] is not None
+        and item["size"] == existing["size"]
+        and existing["page_count"] is not None
+        and existing["page_count"] > 0
+        and existing["chunk_count"] > 0
+    )
+
+def pdf_ready_for_reactivation(item, existing, reader_password):
+    """Prüft, ob der gespeicherte PDF-Index zur Nextcloud-Datei passt."""
+
+    if not pdf_metadata_matches(item, existing):
+        return False
+
+    return validate_pdf_index(
+        existing["id"],
+        reader_password,
+    )
+
+def reactivate_pdf(
+    document_id, password, expected_etag, expected_size,
+    expected_file_id, expected_path, dry_run=True
+):
+    """Reaktiviert ein validiertes PDF und entfernt seine Fehlvormerkung."""
+
+    with psycopg.connect(
+        host="127.0.0.1",
+        port=5432,
+        dbname="retro_rag",
+        user="retro_rag_ingest",
+        password=password,
+        connect_timeout=10,
+    ) as conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT is_active, nextcloud_file_id, nextcloud_path
+                    FROM knowledge.document
+                    WHERE id = %s
+                    FOR UPDATE
+                """, (document_id,))
+
+                row = cur.fetchone()
+                if row is None:
+                    raise RuntimeError("Dokument nicht gefunden")
+                was_active, stored_file_id, stored_path = row
+                if (
+                    str(stored_file_id) != str(expected_file_id)
+                    or unquote(stored_path or "") != unquote(expected_path)
+                ):
+                    raise RuntimeError("Reaktivierung abgebrochen: Datei-ID/Pfad verändert")
+
+                cur.execute("""
+                    SELECT etag, file_size
+                    FROM knowledge.pdf_sync_state
+                    WHERE document_id = %s
+                    FOR UPDATE
+                """, (document_id,))
+
+                sync_row = cur.fetchone()
+
+                if (
+                    sync_row is None
+                    or sync_row[0] != expected_etag
+                    or sync_row[1] != expected_size
+                ):
+                    raise RuntimeError(
+                        "Reaktivierung abgebrochen: PDF-Version stimmt nicht überein"
+                    )
+
+                # Auch unter Dokument-Lock auf vollständigen Index prüfen.
+                cur.execute("""
+                    SELECT pm.page_count, COUNT(c.id),
+                           MIN(c.chunk_index), MAX(c.chunk_index)
+                    FROM knowledge.pdf_metadata pm
+                    LEFT JOIN rag.chunk c
+                      ON c.document_id = pm.document_id
+                     AND c.embedding_model = 'nomic-embed-text'
+                    WHERE pm.document_id = %s
+                    GROUP BY pm.page_count
+                """, (document_id,))
+                index_row = cur.fetchone()
+                if not index_row or not (
+                    index_row[0] > 0 and index_row[1] > 0
+                    and index_row[2] == 0
+                    and index_row[3] == index_row[1] - 1
+                ):
+                    raise RuntimeError("Reaktivierung abgebrochen: PDF-Index ungültig")
+
+                cur.execute("""
+                    UPDATE knowledge.document
+                    SET is_active = true
+                    WHERE id = %s
+                      AND is_active = false
+                """, (document_id,))
+
+                cur.execute("""
+                    DELETE FROM knowledge.pdf_missing_state
+                    WHERE document_id = %s
+                """, (document_id,))
+
+                result = "ALREADY_ACTIVE" if was_active else "REACTIVATED"
+
+            if dry_run:
+                conn.rollback()
+            else:
+                conn.commit()
+
+            return result
+
+        except Exception:
+            conn.rollback()
+            raise
+
 def import_document(item, args):
     """Import a single PDF through the existing importer."""
 
@@ -343,6 +623,18 @@ def import_document(item, args):
         raise RuntimeError(
             f"PDF-Import fehlgeschlagen: {relative_path}"
         )
+
+def pdf_is_unchanged(item, existing):
+    """Prüft, ob eine PDF gemäß dem gespeicherten Sync-Stand unverändert ist."""
+
+    return bool(
+        existing
+        and unquote(existing["path"]) == unquote(item["path"])
+        and existing["etag"] == item["etag"]
+        and existing["size"] == item["size"]
+        and existing["page_count"] is not None
+        and existing["chunk_count"] > 0
+    )
 
 def main():
     parser = argparse.ArgumentParser(
@@ -425,18 +717,18 @@ def main():
 
         stored_path = existing["path"]
 
-        if stored_path and stored_path.startswith(root):
+        if stored_path and unquote(stored_path).startswith(unquote(root)):
             orphaned.append((file_id, existing))
 
     for file_id, existing in orphaned:
-        exists = check_webdav_path(
+        status = check_webdav_path(
             args.url,
             existing["path"],
             args.user,
             password,
+            expected_file_id=file_id,
+            return_status=True,
         )
-
-        status = "MISSING" if not exists else "CHECK"
 
         print(
             f"{status:<8} {file_id:>8}  "
@@ -455,31 +747,87 @@ def main():
             "Automatischer Import benötigt NEXTCLOUD_APP_PASSWORD und PGPASSWORD"
         )
 
+    # Ein zweiter vollständiger Scan schützt gegen vorübergehend unvollständige
+    # Verzeichnisantworten. Bei Abweichung keine Lebenszyklus-Änderungen.
+    def snapshot(entries):
+        return {str(entry["fileid"]): (
+            unquote(entry["path"]), entry["etag"], entry["size"]
+        ) for entry in entries}
+
+    second_files = discover(args.url, args.user, password, args.folder)
+    if snapshot(files) != snapshot(second_files):
+        raise RuntimeError("Nextcloud-Inhalt während der Scans verändert; Sync abgebrochen")
+
+    ingest_password = os.environ["PGPASSWORD"]
     failures = []
 
     for item in files:
-        existing = known.get(item["fileid"])
+        existing = known.get(str(item["fileid"]))
+        unchanged = pdf_is_unchanged(item, existing)
 
-        if (
-            existing
-            and unquote(existing["path"]) == unquote(item["path"])
-            and existing["etag"] == item["etag"]
-            and existing["size"] == item["size"]
-            and existing["page_count"] is not None
-            and existing["chunk_count"] > 0
-        ):
+        if unchanged and existing["is_active"]:
+            # Eine alte Fehlvormerkung darf nicht zur späteren Deaktivierung
+            # führen, wenn die Datei zwischenzeitlich wieder erschienen ist.
+            if get_missing_state(existing["id"], ingest_password) is not None:
+                clear_missing_pdf(existing["id"], ingest_password)
             continue
 
         try:
-            import_document(item, args)
-        except (RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
+            if unchanged and existing and not existing["is_active"]:
+                if pdf_ready_for_reactivation(item, existing, db_password):
+                    print(f"REACTIVATION_READY: {existing['document_key']}")
+                else:
+                    print(f"REIMPORT_REQUIRED: {existing['document_key']}")
+                    import_document(item, args)
+            else:
+                import_document(item, args)
+
+            # Nach dem Import die DB neu lesen (neue Dokumente werden erst
+            # jetzt sichtbar) und einen weiteren WebDAV-Scan ausführen.
+            refreshed = get_known_pdfs(db_password).get(str(item["fileid"]))
+            current = discover(args.url, args.user, password, args.folder)
+            live = next((entry for entry in current
+                         if str(entry["fileid"]) == str(item["fileid"])), None)
+            if live is None or not pdf_ready_for_reactivation(live, refreshed, db_password):
+                raise RuntimeError("PDF nach Import/Reaktivierungsprüfung nicht mehr aktuell")
+            if not pdf_metadata_matches(item, refreshed):
+                raise RuntimeError("PDF hat sich seit dem Ausgangsscan verändert")
+
+            outcome = reactivate_pdf(
+                refreshed["id"], ingest_password, live["etag"], live["size"],
+                live["fileid"], live["path"], dry_run=False,
+            )
+            if not existing or not existing["is_active"] or outcome != "ALREADY_ACTIVE":
+                print(f"{outcome}: {refreshed['document_key']}")
+
+        except (RuntimeError, ValueError, subprocess.TimeoutExpired, psycopg.Error,
+                HTTPError, OSError) as exc:
             print(f"FEHLER: {exc}", file=sys.stderr)
             failures.append(item["path"])
 
+    # Fehlende IDs dürfen nur vorgemerkt/deaktiviert werden, wenn sie in
+    # beiden vollständigen Scans fehlten. Der alte Pfad wird separat geprüft.
+    # MATCH bedeutet: ein Scan war offenbar unvollständig -> sicherheitshalber
+    # keine Deaktivierung. MISSING oder MISMATCH: alter Dateieintrag fehlt.
+    for file_id, existing in orphaned:
+        try:
+            status = check_webdav_path(
+                args.url, existing["path"], args.user, password,
+                expected_file_id=file_id, return_status=True,
+            )
+            if status == "MATCH":
+                print(f"ORPHAN_UNCERTAIN: {existing['document_key']} (Pfad existiert)")
+                continue
+            outcome = update_missing_lifecycle(
+                existing["id"], ingest_password, dry_run=False
+            )
+            print(f"{outcome}: {existing['document_key']} ({status})")
+        except (RuntimeError, ValueError, psycopg.Error, HTTPError, OSError) as exc:
+            print(f"FEHLER Lebenszyklus {file_id}: {exc}", file=sys.stderr)
+            failures.append(existing["path"])
+
     if failures:
-        raise RuntimeError(
-            f"{len(failures)} PDF-Import(e) fehlgeschlagen"
-        )
+        raise RuntimeError(f"{len(failures)} PDF-Verarbeitung(en) fehlgeschlagen")
 
 
 if __name__ == "__main__":

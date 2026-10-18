@@ -226,13 +226,16 @@ def existing_state(conn, digest, path, fid, expected_chunks, document_key):
             doc_id, origin, kind, stored_hash, stored_path, stored_fid = row
             if origin != 'own' or kind != 'manual':
                 fail('Dokument-ID ist bereits fuer eine andere Herkunft/Art vergeben')
-            cur.execute('SELECT COUNT(*) FROM rag.chunk WHERE document_id=%s AND embedding_model=%s',
+            cur.execute('''SELECT COUNT(*), MIN(chunk_index), MAX(chunk_index)
+                           FROM rag.chunk WHERE document_id=%s AND embedding_model=%s''',
                         (doc_id, MODEL))
-            count = cur.fetchone()[0]
+            count, first_index, last_index = cur.fetchone()
             cur.execute('SELECT COUNT(*) FROM knowledge.pdf_metadata WHERE document_id=%s', (doc_id,))
             meta_count = cur.fetchone()[0]
             return (stored_hash == digest and stored_path == path and stored_fid == fid
-                    and count == expected_chunks and meta_count == 1)
+                    and count == expected_chunks and count > 0
+                    and first_index == 0 and last_index == count - 1
+                    and meta_count == 1)
         return False
 
 
@@ -330,8 +333,13 @@ def update_sync_state(conn, digest, path, fid, expected_chunks, metadata, docume
                       WHERE c.document_id = d.id
                         AND c.embedding_model = %s
                   ) = %s
+                  AND (SELECT MIN(c.chunk_index) FROM rag.chunk c
+                       WHERE c.document_id = d.id AND c.embedding_model = %s) = 0
+                  AND (SELECT MAX(c.chunk_index) FROM rag.chunk c
+                       WHERE c.document_id = d.id AND c.embedding_model = %s) = %s - 1
                 FOR UPDATE OF d
-            ''', (document_key, digest, path, fid, MODEL, expected_chunks))
+            ''', (document_key, digest, path, fid, MODEL, expected_chunks,
+                        MODEL, MODEL, expected_chunks))
 
             row = cur.fetchone()
             if row is None:
@@ -412,16 +420,17 @@ def main():
         vectors.append(embedding(content, args.ollama_url))
         if i % 20 == 0 or i == len(pdf['chunks']):
             print(f'Embeddings: {i}/{len(pdf["chunks"])}', flush=True)
-        with psycopg.connect(**conn_args) as conn:
-            document_id = store(
-                conn, pdf, path, fid, digest, vectors,
-                metadata["etag"],
-                metadata["size"],
-                parsedate_to_datetime(metadata["modified"])
-                if metadata["modified"] else None,
-                document_key,
-                document_title
-            )
+
+    with psycopg.connect(**conn_args) as conn:
+        document_id = store(
+            conn, pdf, path, fid, digest, vectors,
+            metadata["etag"],
+            metadata["size"],
+            parsedate_to_datetime(metadata["modified"])
+            if metadata["modified"] else None,
+            document_key,
+            document_title
+        )
     print(f'COMMIT: Dokument-ID {document_id}, {len(vectors)} Chunks mit PDF-Seitenreferenzen gespeichert.')
 
 

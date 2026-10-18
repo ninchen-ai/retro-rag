@@ -9,7 +9,7 @@ import psycopg
 import subprocess
 import sys
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.error import HTTPError
 from collections import deque
 from urllib.parse import quote, unquote, urlsplit
 from urllib.request import Request, urlopen
@@ -71,9 +71,25 @@ def discover(url, user, password, folder):
         )
 
         with urlopen(request, timeout=30) as response:
+            if response.status != 207:
+                raise RuntimeError(
+                    f"WebDAV PROPFIND: HTTP {response.status} für {directory}"
+                )
             xml = ET.fromstring(response.read())
 
-        for item in xml.findall("d:response", DAV):
+        if xml.tag != "{DAV:}multistatus":
+            raise RuntimeError(
+                f"Ungültige WebDAV-Antwort für {directory}"
+            )
+
+        responses = xml.findall("d:response", DAV)
+
+        if not responses:
+            raise RuntimeError(
+                f"Leere WebDAV-Verzeichnisantwort für {directory}"
+            )
+
+        for item in responses:
             href = item.findtext("d:href", namespaces=DAV)
             if not href:
                 continue
@@ -117,6 +133,53 @@ def discover(url, user, password, folder):
 
     return sorted(files, key=lambda f: f["path"])
 
+def check_webdav_path(base, path, user, password):
+    """Prüft einen gespeicherten WebDAV-Pfad ohne Datei-Download."""
+
+    parsed = urlsplit(base)
+
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("Ungültige Nextcloud-URL")
+
+    if parsed.scheme == "http" and parsed.hostname not in (
+        "127.0.0.1", "localhost", "::1"
+    ):
+        raise ValueError("HTTP ist nur über localhost erlaubt")
+
+    prefix = f"/remote.php/dav/files/{quote(user, safe='')}/"
+
+    if not unquote(path).startswith(unquote(prefix)):
+        raise ValueError("WebDAV-Pfad außerhalb des Benutzerverzeichnisses")
+
+    # Gespeicherte Pfade können bereits URL-kodiert sein.
+    encoded_path = quote(unquote(path), safe="/")
+
+    auth = base64.b64encode(f"{user}:{password}".encode()).decode()
+
+    request = Request(
+        base.rstrip("/") + encoded_path,
+        data=b'<d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>',
+        headers={
+            "Authorization": "Basic " + auth,
+            "Depth": "0",
+            "Content-Type": "application/xml",
+        },
+        method="PROPFIND",
+    )
+
+    try:
+        with urlopen(request, timeout=30) as response:
+            if response.status != 207:
+                raise RuntimeError(
+                    f"Unerwartete WebDAV-Antwort: HTTP {response.status}"
+                )
+            return True
+
+    except HTTPError as exc:
+        if exc.code == 404:
+            return False
+        raise
+
 def get_known_pdfs(password):
     """Read existing PDF records using the read-only database role."""
     with psycopg.connect(
@@ -149,6 +212,7 @@ def get_known_pdfs(password):
                     LEFT JOIN knowledge.pdf_metadata pm
                         ON pm.document_id = d.id
                     WHERE d.document_kind = 'manual'
+                        AND d.origin = 'own'
                 """)
                 rows = cur.fetchall()
 
@@ -252,7 +316,7 @@ def main():
             status = "CHECK"
             known_count += 1
 
-        elif existing["path"] != item["path"]:
+        elif unquote(existing["path"]) != unquote(item["path"]):
             status = "CHANGED"
             known_count += 1
 
@@ -273,6 +337,38 @@ def main():
             f"{item['path']}"
         )
 
+    # Gespeicherte PDFs erkennen, die beim WebDAV-Scan fehlen.
+    # Nur unterhalb des synchronisierten Ordners prüfen.
+    root = f"/remote.php/dav/files/{args.user}/{args.folder.strip('/')}/"
+    discovered_ids = {str(item["fileid"]) for item in files}
+
+    orphaned = []
+
+    for file_id, existing in known.items():
+        if file_id in discovered_ids:
+            continue
+
+        stored_path = existing["path"]
+
+        if stored_path and stored_path.startswith(root):
+            orphaned.append((file_id, existing))
+
+    for file_id, existing in orphaned:
+        exists = check_webdav_path(
+            args.url,
+            existing["path"],
+            args.user,
+            password,
+        )
+
+        status = "MISSING" if not exists else "CHECK"
+
+        print(
+            f"{status:<8} {file_id:>8}  "
+            f"{existing['document_key']}  "
+            f"{existing['path']}"
+        )
+
     print(f"\nNeu: {new_count} | Bekannt: {known_count}")
 
     if not args.apply:
@@ -291,7 +387,7 @@ def main():
 
         if (
             existing
-            and existing["path"] == item["path"]
+            and unquote(existing["path"]) == unquote(item["path"])
             and existing["etag"] == item["etag"]
             and existing["size"] == item["size"]
             and existing["page_count"] is not None

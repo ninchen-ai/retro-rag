@@ -64,6 +64,7 @@ def retrieve(question, password, top_k):
                 FROM rag.chunk AS c
                 JOIN knowledge.document AS d ON d.id = c.document_id
                 WHERE c.embedding_model = 'nomic-embed-text'
+                    AND d.is_active = true
                 ORDER BY c.embedding <=> %s::vector
                 LIMIT %s
             ''', (vector, vector, top_k))

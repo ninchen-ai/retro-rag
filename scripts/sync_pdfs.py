@@ -8,6 +8,7 @@ import os
 import psycopg
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError
 from collections import deque
@@ -194,6 +195,8 @@ def get_known_pdfs(password):
         with conn.cursor() as cur:
                 cur.execute("""
                     SELECT
+                        d.id,
+                        d.is_active,
                         d.nextcloud_file_id,
                         d.document_key,
                         d.nextcloud_path,
@@ -218,6 +221,8 @@ def get_known_pdfs(password):
 
         return {
             str(file_id): {
+                "id": document_id,
+                "is_active": is_active,
                 "document_key": key,
                 "path": path,
                 "etag": etag,
@@ -225,8 +230,78 @@ def get_known_pdfs(password):
                 "page_count": page_count,
                 "chunk_count": chunk_count,
             }
-            for file_id, key, path, etag, size, page_count, chunk_count in rows
+            for document_id, is_active, file_id, key, path, etag, size, page_count, chunk_count in rows
         }
+
+def missing_grace_period_elapsed(first_missing_at, now=None):
+    """Prüft, ob die erste Fehlmeldung mindestens 10 Minuten zurückliegt."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    return now - first_missing_at >= timedelta(minutes=10)
+
+def get_missing_state(document_id, password):
+    """Liest den bisherigen Fehlstatus einer PDF."""
+
+    with psycopg.connect(
+        host="127.0.0.1",
+        port=5432,
+        dbname="retro_rag",
+        user="retro_rag_ingest",
+        password=password,
+        connect_timeout=10,
+        options="-c default_transaction_read_only=on",
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT first_missing_at, last_checked_at
+                FROM knowledge.pdf_missing_state
+                WHERE document_id = %s
+            """, (document_id,))
+
+            return cur.fetchone()
+
+def record_missing_pdf(document_id, password):
+    """Merkt die erste bestätigte Abwesenheit einer PDF vor."""
+
+    with psycopg.connect(
+        host="127.0.0.1",
+        port=5432,
+        dbname="retro_rag",
+        user="retro_rag_ingest",
+        password=password,
+        connect_timeout=10,
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO knowledge.pdf_missing_state (
+                    document_id,
+                    first_missing_at,
+                    last_checked_at
+                )
+                VALUES (%s, now(), now())
+                ON CONFLICT (document_id)
+                DO UPDATE SET
+                    last_checked_at = now()
+            """, (document_id,))
+
+def clear_missing_pdf(document_id, password):
+    """Entfernt die Fehlvormerkung einer wiedergefundenen PDF."""
+
+    with psycopg.connect(
+        host="127.0.0.1",
+        port=5432,
+        dbname="retro_rag",
+        user="retro_rag_ingest",
+        password=password,
+        connect_timeout=10,
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                DELETE FROM knowledge.pdf_missing_state
+                WHERE document_id = %s
+            """, (document_id,))
+
 def import_document(item, args):
     """Import a single PDF through the existing importer."""
 

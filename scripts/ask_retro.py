@@ -12,7 +12,7 @@ import psycopg
 OLLAMA = 'http://127.0.0.1:11434'
 
 
-def ollama_post(endpoint, body, timeout=120):
+def ollama_post(endpoint, body, timeout=1200):
     request = urllib.request.Request(
         f'{OLLAMA}{endpoint}',
         data=json.dumps(body, ensure_ascii=False).encode('utf-8'),
@@ -132,7 +132,7 @@ def main():
         ],
         'stream': False,
         'think': False,
-        'options': {'temperature': 0.1, 'num_ctx': 4096},
+        'options': {'temperature': 0.1, 'num_ctx': 8192},
     }, timeout=240)
     # print('\n--- ANTWORT ---\n' + answer.get('message', {}).get('content', '(Keine Antwort)'))
 

@@ -12,7 +12,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-
+from scripts.retrieval_adapter import retrieve_context_v2
 from scripts.ask_retro import format_context, ollama_post, retrieve
 
 app = FastAPI(title="Retro-RAG API", version="0.2.0", docs_url=None, redoc_url=None)
@@ -138,8 +138,47 @@ def generate_answer(question: str) -> tuple[str, dict[str, int]]:
     if not db_password:
         raise HTTPException(status_code=503, detail="Database reader not configured")
 
-    inventory, passages = retrieve(question, db_password, 5)
-    context = format_context(inventory, passages)
+    
+    retrieval_version = os.environ.get(
+        "RETRO_RAG_RETRIEVAL_VERSION", "v1"
+    ).strip().lower()
+
+    if retrieval_version == "v2":
+        retrieved = retrieve_context_v2(
+            question,
+            db_password,
+            candidates=20,
+            top_k=5,
+        )
+
+        context = retrieved["context"]
+        passages = [
+            (
+                p["key"],
+                p["title"],
+                p["chunk"],
+                p["content"],
+                0.0,
+                p["page_start"],
+                p["page_end"],
+            )
+            for p in retrieved["passages"]
+        ]
+
+    elif retrieval_version == "v1":
+        inventory, passages = retrieve(
+            question, db_password, 5
+        )
+        context = format_context(
+            inventory, passages
+        )
+
+    else:
+        raise HTTPException(
+            status_code=503,
+            detail="Unsupported retrieval version"
+        )
+
     system_prompt = (
     "Du bist ein sachlicher technischer Assistent für eine private "
     "Retro-Computing-Sammlung. "

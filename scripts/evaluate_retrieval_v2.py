@@ -7,8 +7,7 @@ import os
 import sys
 import psycopg
 
-from search_terms import expand_search_terms
-from retrieval_v2 import hybrid_search
+from scripts.retrieval_v2 import hybrid_search
 
 TEST_CASES = [
     {

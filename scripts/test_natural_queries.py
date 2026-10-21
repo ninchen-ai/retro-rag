@@ -6,7 +6,7 @@ import os
 
 import psycopg
 
-from retrieval_v2 import hybrid_search
+from scripts.retrieval_v2 import hybrid_search
 
 
 QUESTIONS = [

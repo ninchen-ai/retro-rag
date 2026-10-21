@@ -8,10 +8,9 @@ import os
 import re
 
 import psycopg
-from ask_retro import ollama_post
-from search_terms import expand_search_terms
-from chunk_quality import classify_chunk, QUALITY_FACTORS
-
+from scripts.ask_retro import ollama_post
+from scripts.search_terms import expand_search_terms
+from scripts.chunk_quality import classify_chunk, QUALITY_FACTORS
 
 def get_embedding(question):
     result = ollama_post("/api/embed", {

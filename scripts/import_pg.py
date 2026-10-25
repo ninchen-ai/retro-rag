@@ -136,7 +136,14 @@ class Cloud:
                 check(clean.startswith(base_clean),'WebDAV lieferte Pfad außerhalb des Projekts')
                 directory = response.find('.//d:resourcetype/d:collection',DAV) is not None
                 if directory:
-                    queue.append(path if path.endswith('/') else path+'/')
+                    relative_path = clean[len(base_clean):].strip('/')
+                    top_folder = relative_path.split('/')[0]
+
+                    if top_folder in EXCLUDED_DIRECTORIES:
+                        continue
+
+                    queue.append(path if path.endswith('/') else sys.path+'/')
+
                 elif clean.lower().endswith('.md'):
                     raw = self.req(path)
                     # Explicit request for stable Nextcloud ID; fail closed when absent.

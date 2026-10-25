@@ -118,8 +118,6 @@ def main():
                     flush=True,
                 )
 
-                rank = evaluate(cur, test)
-
                 primary_ok, pdf_rank = evaluate(cur, test)
 
                 if primary_ok and pdf_rank is not None:

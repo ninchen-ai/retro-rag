@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """Nextcloud Markdown -> PDF-Handbuchbeziehungen; nur Dry-Run."""
 
@@ -12,7 +11,7 @@ from urllib.parse import unquote
 
 import psycopg
 
-from import_pg import Cloud, check, validate_relations
+from scripts.import_pg import Cloud, check, validate_relations
 
 
 def validate_manual_path(value):
@@ -30,6 +29,53 @@ def validate_manual_path(value):
     )
     return value
 
+def normalize_manual_entry(entry):
+    """Vereinheitlicht alte und neue PDF-Referenzen."""
+
+    if isinstance(entry, str):
+        return {
+            "path": validate_manual_path(entry),
+            "relation": "manual",
+            "applies_to": "mainboard",
+            "chip": None,
+        }
+
+    check(
+        isinstance(entry, dict),
+        "Handbuchreferenz muss Text oder YAML-Objekt sein",
+    )
+
+    path = validate_manual_path(entry.get("path"))
+    relation = entry.get("relation")
+    applies_to = entry.get("applies_to")
+
+    check(
+        (relation, applies_to) in {
+            ("manual", "mainboard"),
+            ("datasheet", "chip"),
+            ("reference", "chip"),
+            ("errata", "chip"),
+        },
+        f"Ungültige Dokumentbeziehung: {relation}/{applies_to}",
+    )
+
+    chip = entry.get("chip")
+
+    if applies_to == "chip":
+        check(
+            isinstance(chip, str) and bool(chip.strip()),
+            f"Chip-Angabe fehlt: {path}",
+        )
+        check(chip == chip.strip(), "Leerzeichen am Chipnamen")
+    else:
+        check(chip is None, "Mainboard-Handbuch darf keinen Chip angeben")
+
+    return {
+        "path": path,
+        "relation": relation,
+        "applies_to": applies_to,
+        "chip": chip,
+    }
 
 def main():
     parser = argparse.ArgumentParser(
@@ -62,31 +108,68 @@ def main():
     # Exakt denselben Nextcloud-Pfadstil wie der Importer verwenden.
     root = unquote(cloud.prefix)
     requested = []
+    seen_relations = set()
 
     for doc in docs:
         meta = doc["meta"]
+
         if meta["type"] != "hardware_model":
             continue
 
         manuals = meta.get("manuals", [])
+
         check(
             isinstance(manuals, list),
             f"{meta['id']}: manuals muss eine Liste sein",
         )
 
-        check(
-            len(manuals) == len(set(
-                validate_manual_path(p) for p in manuals
-            )),
-            f"{meta['id']}: Doppelte Handbuchreferenz",
-        )
+        chips = meta.get("chips", [])
 
-        for manual in manuals:
-            relative = validate_manual_path(manual)
-            requested.append((
+        for raw_entry in manuals:
+            entry = normalize_manual_entry(raw_entry)
+
+            chip_manufacturer = None
+            chip_role = None
+
+            if entry["applies_to"] == "chip":
+                matches = [
+                    chip for chip in chips
+                    if chip["name"] == entry["chip"]
+                ]
+
+                check(
+                    len(matches) == 1,
+                    f"{meta['id']}: Chip {entry['chip']} "
+                    "nicht eindeutig im Mainboard definiert",
+                )
+
+                chip_manufacturer = matches[0]["manufacturer"]
+                chip_role = matches[0]["role"]
+
+            identity = (
                 meta["id"],
-                root + relative,
-            ))
+                entry["path"],
+                entry["relation"],
+                entry["applies_to"],
+                chip_manufacturer,
+                entry["chip"],
+            )
+
+            check(
+                identity not in seen_relations,
+                f"Doppelte Dokumentreferenz: {identity}",
+            )
+            seen_relations.add(identity)
+
+            requested.append({
+                "model_key": meta["id"],
+                "pdf_path": root + entry["path"],
+                "relation": entry["relation"],
+                "applies_to": entry["applies_to"],
+                "chip_manufacturer": chip_manufacturer,
+                "chip": entry["chip"],
+                "chip_role": chip_role,
+            })
 
     with psycopg.connect(
         host="127.0.0.1",
@@ -103,18 +186,13 @@ def main():
             errors = 0
             pending = []
 
-            for model_key, pdf_path in requested:
-                cur.execute("""
-                    SELECT cm.id
-                    FROM hw.component_model cm
-                    JOIN knowledge.document d
-                      ON d.id = cm.document_id
-                    WHERE d.document_key = %s
-                      AND d.is_active = true
-                      AND d.origin = 'own'
-                """, (model_key,))
-                models = cur.fetchall()
+            for entry in requested:
+                model_key = entry["model_key"]
+                pdf_path = entry["pdf_path"]
+                relation = entry["relation"]
+                applies_to = entry["applies_to"]
 
+                # PDF eindeutig auflösen.
                 cur.execute("""
                     SELECT id, document_key
                     FROM knowledge.document
@@ -123,38 +201,118 @@ def main():
                       AND origin = 'own'
                       AND is_active = true
                 """, (pdf_path,))
+
                 manuals = cur.fetchall()
 
-                if len(models) != 1 or len(manuals) != 1:
+                if len(manuals) != 1:
                     errors += 1
                     print(
                         f"ERROR {model_key} -> {pdf_path} "
-                        f"(Modelle={len(models)}, PDFs={len(manuals)})"
+                        f"(PDFs={len(manuals)})"
                     )
                     continue
 
-                model_id = models[0][0]
                 document_id, manual_key = manuals[0]
 
-                cur.execute("""
-                    SELECT EXISTS (
-                        SELECT 1
-                        FROM knowledge.document_component
-                        WHERE document_id = %s
-                          AND component_model_id = %s
-                          AND relation = 'manual'
-                    )
-                """, (document_id, model_id))
+                # Mainboard und Chipbeziehungen unterschiedlich auflösen.
+                if applies_to == "mainboard":
+                    cur.execute("""
+                        SELECT cm.id
+                        FROM hw.component_model cm
+                        JOIN knowledge.document d
+                          ON d.id = cm.document_id
+                        WHERE d.document_key = %s
+                          AND d.origin = 'own'
+                          AND d.is_active = true
+                    """, (model_key,))
+
+                    targets = cur.fetchall()
+
+                    if len(targets) != 1:
+                        errors += 1
+                        print(f"ERROR Mainboard: {model_key}")
+                        continue
+
+                    target_id = targets[0][0]
+
+                    cur.execute("""
+                        SELECT EXISTS (
+                            SELECT 1
+                            FROM knowledge.document_component
+                            WHERE document_id = %s
+                              AND component_model_id = %s
+                              AND relation = %s
+                        )
+                    """, (document_id, target_id, relation))
+
+                else:
+                    # Chip muss zum angegebenen Mainboard gehören.
+                    cur.execute("""
+                        SELECT c.id
+                        FROM hw.chip c
+                        JOIN hw.manufacturer m
+                          ON m.id = c.manufacturer_id
+                        JOIN hw.component_chip cc
+                          ON cc.chip_id = c.id
+                        JOIN hw.component_model cm
+                          ON cm.id = cc.component_model_id
+                        JOIN knowledge.document d
+                          ON d.id = cm.document_id
+                        WHERE d.document_key = %s
+                          AND d.origin = 'own'
+                          AND d.is_active = true
+                          AND m.name = %s
+                          AND c.name = %s
+                          AND cc.role = %s
+                    """, (
+                        model_key,
+                        entry["chip_manufacturer"],
+                        entry["chip"],
+                        entry["chip_role"],
+                    ))
+
+                    targets = cur.fetchall()
+
+                    if len(targets) != 1:
+                        errors += 1
+                        print(
+                            f"ERROR Chip: {model_key} -> "
+                            f"{entry['chip']}"
+                        )
+                        continue
+
+                    target_id = targets[0][0]
+
+                    cur.execute("""
+                        SELECT EXISTS (
+                            SELECT 1
+                            FROM knowledge.document_chip
+                            WHERE document_id = %s
+                              AND chip_id = %s
+                              AND relation = %s
+                        )
+                    """, (document_id, target_id, relation))
 
                 exists = cur.fetchone()[0]
                 status = "EXISTS" if exists else "PLANNED"
 
                 if not exists:
-                    pending.append((document_id, model_id))
+                    pending.append((
+                        applies_to,
+                        document_id,
+                        target_id,
+                        relation,
+                    ))
+
+                target_name = (
+                    model_key
+                    if applies_to == "mainboard"
+                    else f"{entry['chip_manufacturer']} {entry['chip']}"
+                )
 
                 print(
                     f"{status:7} {manual_key} "
-                    f"-> {model_key}"
+                    f"-> {target_name} ({relation})"
                 )
     if errors:
         print(
@@ -204,13 +362,36 @@ def main():
                     "Falsche Datenbank oder Benutzerrolle",
                 )
 
-                for document_id, model_id in pending:
-                    cur.execute("""
-                        INSERT INTO knowledge.document_component
-                            (document_id, component_model_id, relation)
-                        VALUES (%s, %s, 'manual')
-                        ON CONFLICT DO NOTHING
-                    """, (document_id, model_id))
+                for applies_to, document_id, target_id, relation in pending:
+
+                    if applies_to == "mainboard":
+                        cur.execute("""
+                            INSERT INTO knowledge.document_component
+                                (document_id, component_model_id, relation)
+                            VALUES (%s, %s, %s)
+                            ON CONFLICT DO NOTHING
+                        """, (
+                            document_id,
+                            target_id,
+                            relation,
+                        ))
+
+                    elif applies_to == "chip":
+                        cur.execute("""
+                            INSERT INTO knowledge.document_chip
+                                (document_id, chip_id, relation)
+                            VALUES (%s, %s, %s)
+                            ON CONFLICT DO NOTHING
+                        """, (
+                            document_id,
+                            target_id,
+                            relation,
+                        ))
+
+                    else:
+                        raise ValueError(
+                            f"Unbekannter Beziehungstyp: {applies_to}"
+                        )
 
     print(
         f"COMMIT: Bis zu {len(pending)} neue "

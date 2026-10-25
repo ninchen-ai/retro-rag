@@ -24,12 +24,11 @@ def get_embedding(question):
 
     return "[" + ",".join(map(str, vectors[0])) + "]"
 
-
 def get_model_document_ids(cur, model_id):
-    """Liefert aktiven Markdown-Steckbrief und zugeordnete Handbücher."""
+    """Liefert Modell-Steckbrief, Handbücher und Chip-Datenblätter."""
 
     cur.execute("""
-        SELECT DISTINCT d.id, d.document_key
+        SELECT d.id, d.document_key
         FROM knowledge.document d
         JOIN hw.component_model cm
           ON cm.document_id = d.id
@@ -38,7 +37,7 @@ def get_model_document_ids(cur, model_id):
 
         UNION
 
-        SELECT DISTINCT d.id, d.document_key
+        SELECT d.id, d.document_key
         FROM knowledge.document d
         JOIN knowledge.document_component dc
           ON dc.document_id = d.id
@@ -47,11 +46,23 @@ def get_model_document_ids(cur, model_id):
           AND d.document_kind = 'manual'
           AND d.is_active = true
 
+        UNION
+
+        SELECT d.id, d.document_key
+        FROM hw.component_chip cc
+        JOIN knowledge.document_chip dc
+          ON dc.chip_id = cc.chip_id
+        JOIN knowledge.document d
+          ON d.id = dc.document_id
+        WHERE cc.component_model_id = %s
+          AND dc.relation IN ('datasheet', 'reference', 'errata')
+          AND d.document_kind = 'manual'
+          AND d.is_active = true
+
         ORDER BY document_key
-    """, (model_id, model_id))
+    """, (model_id, model_id, model_id))
 
     return cur.fetchall()
-
 
 def vector_search(cur, vector, limit, document_ids=None):
     cur.execute("""

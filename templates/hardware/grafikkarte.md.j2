@@ -1,0 +1,69 @@
+---
+{{ frontmatter }}
+---
+
+# {{ manufacturer }} {{ model }}
+
+## Kurzbeschreibung
+
+Grafikkarte {{ model }} von {{ manufacturer }}.
+{% if specs.gpu_chip %}
+Grafikprozessor: {{ specs.gpu_manufacturer or "Unbekannt" }} {{ specs.gpu_chip }}.
+{% endif %}
+{% if specs.vram_mib is not none %}
+Grafikspeicher: {{ specs.vram_mib }} MiB{% if specs.memory_type %} {{ specs.memory_type }}{% endif %}.
+{% endif %}
+
+## Technische Daten
+
+| Eigenschaft | Wert |
+|---|---|
+| Hersteller | {{ manufacturer }} |
+| Modell | {{ model }} |
+{% if specs.gpu_chip %}| Grafikchip | {{ specs.gpu_chip }} |
+{% endif %}{% if specs.interface %}| Schnittstelle | {{ specs.interface }} |
+{% endif %}{% if specs.core_clock_mhz is not none %}| GPU-Takt | {{ specs.core_clock_mhz }} MHz |
+{% endif %}{% if specs.memory_clock_mhz is not none %}| Speichertakt | {{ specs.memory_clock_mhz }} MHz |
+{% endif %}{% if specs.vram_mib is not none %}| Grafikspeicher | {{ specs.vram_mib }} MiB |
+{% endif %}{% if specs.memory_type %}| Speichertyp | {{ specs.memory_type }} |
+{% endif %}{% if specs.memory_bus_width_bit is not none %}| Speicherinterface | {{ specs.memory_bus_width_bit }} Bit |
+{% endif %}{% if specs.hdcp_support is not none %}| HDCP | {{ "Ja" if specs.hdcp_support else "Nein" }} |
+{% endif %}{% if specs.ramdac_mhz is not none %}| RAMDAC | {{ specs.ramdac_mhz }} MHz |
+{% endif %}{% if specs.dimensions_mm %}| Abmessungen | {{ specs.dimensions_mm }} |
+{% endif %}{% if specs.form_factor %}| Bauform | {{ specs.form_factor }} |
+{% endif %}
+
+## Unterstützte Grafik-APIs
+
+{% for api in specs.api_support %}
+- {{ api }}
+{% else %}
+Keine bestätigten Angaben vorhanden.
+{% endfor %}
+
+## Videoausgänge
+
+{% for output in specs.video_outputs %}
+- {{ output }}
+{% else %}
+Keine bestätigten Angaben vorhanden.
+{% endfor %}
+
+## Treiber und Betriebssysteme
+
+{% for os in specs.supported_operating_systems %}
+- {{ os }}
+{% else %}
+Keine bestätigten Betriebssystemangaben vorhanden.
+{% endfor %}
+
+{% for driver in specs.drivers %}
+- Treiber: {{ driver }}
+{% endfor %}
+
+## Quellen und Belege
+
+Die technischen Angaben stammen aus dem beim Import
+verarbeiteten Quelldokument.
+
+Nicht belegte Eigenschaften wurden nicht ergänzt.

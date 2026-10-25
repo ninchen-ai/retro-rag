@@ -1,0 +1,77 @@
+category: grafikkarte
+document_type: hardware_model
+schema_version: "0.2"
+
+required:
+  - manufacturer
+  - model
+  - category
+
+fields:
+  gpu_manufacturer:
+    type: string
+    nullable: true
+
+  gpu_chip:
+    type: string
+    nullable: true
+
+  interface:
+    type: string
+    nullable: true
+
+  vram_mib:
+    type: integer
+    nullable: true
+    unit: MiB
+
+  memory_type:
+    type: string
+    nullable: true
+
+  memory_bus_width_bit:
+    type: integer
+    nullable: true
+    unit: bit
+
+  core_clock_mhz:
+    type: integer
+    nullable: true
+    unit: MHz
+
+  memory_clock_mhz:
+    type: integer
+    nullable: true
+    unit: MHz
+
+  api_support:
+    type: list
+    items: string
+
+  video_outputs:
+    type: list
+    items: string
+
+  hdcp_support:
+    type: boolean
+    nullable: true
+
+  ramdac_mhz:
+    type: integer
+    nullable: true
+
+  dimensions_mm:
+    type: string
+    nullable: true
+
+  form_factor:
+    type: string
+    nullable: true
+
+  supported_operating_systems:
+    type: list
+    items: string
+
+  drivers:
+    type: list
+    items: string

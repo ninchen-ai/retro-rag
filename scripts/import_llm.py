@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Lokaler Retro-RAG LLM-Importer v0.1 – nur Dry-Run."""
+"""Retro-RAG LLM Importer v0.2: schema-driven, offline dry-run only.
+
+Reads a local TXT/MD/PDF; classifies, extracts GPU data with local Ollama,
+validates evidence and types, and renders existing Jinja2 template.
+Never writes to Nextcloud, PostgreSQL or local source files.
+"""
+from __future__ import annotations
 
 import argparse
 import json
@@ -11,292 +17,509 @@ from urllib.request import Request, urlopen
 
 import pymupdf
 import yaml
+from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from import_pg import parse_md, CATEGORIES
+from import_pg import CATEGORIES, parse_md
 
-MODEL = "qwen3.5:4b"
-OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
-
-SCHEMA = {
+ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_MODEL = "qwen3.5:4b"
+DEFAULT_URL = "http://127.0.0.1:11434/api/chat"
+MAX_BYTES = 50 * 1024 * 1024
+MAX_CHARS = 18_000
+CLASSIFY_SCHEMA = {
     "type": "object",
     "properties": {
-        "category": {
-            "type": "string",
-            "enum": sorted(CATEGORIES | {"unknown"})
-        },
+        "category": {"type": "string", "enum": sorted(CATEGORIES | {"unknown"})},
         "manufacturer": {"type": "string"},
         "model": {"type": "string"},
-        "specs": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "field": {"type": "string"},
-                    "value": {"type": "string"},
-                    "evidence": {"type": "string"}
-                },
-                "required": ["field", "value", "evidence"],
-                "additionalProperties": False
-            }
-        },
-        "warnings": {
-            "type": "array",
-            "items": {"type": "string"}
-        }
     },
-    "required": [
-        "category", "manufacturer", "model",
-        "specs", "warnings"
-    ],
-    "additionalProperties": False
+    "required": ["category", "manufacturer", "model"],
+    "additionalProperties": False,
 }
 
 
-def read_document(path):
+def read_document(path: Path) -> str:
     if not path.is_file():
-        raise ValueError("Datei nicht gefunden")
-
-    if path.stat().st_size > 50 * 1024 * 1024:
-        raise ValueError("Datei größer als 50 MiB")
-
-    if path.suffix.lower() in (".txt", ".md"):
+        raise ValueError(f"Datei nicht gefunden: {path}")
+    if path.stat().st_size > MAX_BYTES:
+        raise ValueError("Datei über 50 MiB")
+    suffix = path.suffix.lower()
+    if suffix in (".txt", ".md"):
         text = path.read_text(encoding="utf-8-sig")
-    elif path.suffix.lower() == ".pdf":
-        pages = []
-        with pymupdf.open(path) as pdf:
-            if pdf.needs_pass:
-                raise ValueError("PDF ist passwortgeschützt")
-            for index, page in enumerate(pdf):
-                pages.append(
-                    f"\n[PDF-Seite {index + 1}]\n"
-                    + page.get_text("text", sort=True)
-                )
-        text = "\n".join(pages)
+    elif suffix == ".pdf":
+        parts = []
+        with pymupdf.open(path) as doc:
+            if doc.needs_pass:
+                raise ValueError("Passwortgeschützte PDF: Review/OCR nötig")
+            for page_number, page in enumerate(doc, 1):
+                parts.append(f"[PDF-Seite {page_number}]\n{page.get_text('text', sort=True)}")
+        text = "\n".join(parts)
     else:
-        raise ValueError("Nur PDF, TXT und MD unterstützt")
-
+        raise ValueError("Nur .pdf, .txt und .md unterstützt")
     if not text.strip():
-        raise ValueError("Kein Text extrahiert – OCR erforderlich")
-
-    if len(text) > 18000:
-        raise ValueError(
-            "Dokument zu lang für v0.1 – "
-            "Abschnittsverarbeitung erforderlich"
-        )
-
+        raise ValueError("Kein Text: Review/OCR erforderlich")
+    if len(text) > MAX_CHARS:
+        raise ValueError("Mehr als 18.000 Zeichen: abschnittsweise Verarbeitung erforderlich")
     return text
 
 
-def extract_with_llm(text):
-    payload = {
-        "model": MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "Du extrahierst Retro-Computer-Hardwaredaten. "
-                    "Verwende ausschließlich Informationen "
-                    "aus dem gelieferten Dokument. "
-                    "Erfinde keine Werte. "
-                    "Die Kategorie muss einem erlaubten "
-                    "Wert entsprechen. "
-                    "Nutze unknown bei unklarer Zuordnung. "
-                    "Gib für jede Spezifikation einen "
-                    "wörtlichen Quellenbeleg in evidence an. "
-                    "Bei Unsicherheit ergänze warnings. "
-                    "Schreibe technische Feldnamen kurz, "
-                    "eindeutig und in snake_case."
-                )
-            },
-            {
-                "role": "user",
-                "content": text
-            }
-        ],
-        "format": SCHEMA,
+def call_ollama(url: str, model: str, system: str, user: str, schema: dict):
+    body = {
+        "model": model,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "format": schema,
         "stream": False,
         "think": False,
-        "options": {
-            "temperature": 0,
-            "num_ctx": 4096
-        }
+        "options": {"temperature": 0, "num_ctx": 8192},
     }
-
-    request = Request(
-        OLLAMA_URL,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST"
-    )
-
+    request = Request(url, data=json.dumps(body).encode(),
+                      headers={"Content-Type": "application/json"}, method="POST")
     with urlopen(request, timeout=300) as response:
         result = json.load(response)
-
-    data = json.loads(result["message"]["content"])
-    return data, result
+    return json.loads(result["message"]["content"]), result
 
 
-def slug(value):
-    value = unicodedata.normalize("NFKD", value)
-    value = value.encode("ascii", "ignore").decode()
-    value = re.sub(r"[^a-z0-9]+", "-", value.lower())
-    return value.strip("-")
+def load_schema(category: str) -> dict:
+    file = ROOT / "config" / "llm-schemas" / f"{category}.yaml"
+    if not file.is_file():
+        raise ValueError(f"Kein Schema für {category}: {file}")
+    schema = yaml.safe_load(file.read_text(encoding="utf-8"))
+    if schema.get("category") != category or schema.get("document_type") != "hardware_model":
+        raise ValueError("Ungültige Schema-Metadaten")
+    return schema
 
 
-def validate_extraction(data, source):
-    issues = []
-
-    category = data.get("category")
-    if category not in CATEGORIES:
-        issues.append("Hardwarekategorie nicht erkannt")
-
-    for field in ("manufacturer", "model"):
-        value = data.get(field, "")
-        if not isinstance(value, str) or not value.strip():
-            issues.append(f"{field} fehlt")
-        elif value.casefold() not in source.casefold():
-            issues.append(f"{field} nicht im Quelltext belegt")
-
-    specs = {}
-    for item in data.get("specs", []):
-        field = item["field"]
-        value = item["value"]
-        evidence = item["evidence"]
-
-        if not re.fullmatch(r"[a-z][a-z0-9_]*", field):
-            issues.append(f"Ungültiger Feldname: {field}")
-            continue
-
-        if not value.strip() or not evidence.strip():
-            issues.append(f"Unvollständige Angabe: {field}")
-            continue
-
-        # Überflüssige Anführungszeichen entfernen
-        evidence = evidence.strip().strip('"\'').strip()
-
-        # Whitespace vereinheitlichen
-        normalized_source = " ".join(source.split()).casefold()
-        normalized_evidence = " ".join(evidence.split()).casefold()
-
-        if normalized_evidence not in normalized_source:
-            issues.append(f"Quellenbeleg nicht gefunden: {field}")
-            continue
-
-        if field in specs:
-            issues.append(f"Doppeltes Feld: {field}")
-            continue
-
-        specs[field] = value
-
-    if not specs:
-        issues.append("Keine belegten Spezifikationen")
-
-    issues.extend(data.get("warnings", []))
-    return specs, issues
+def typed_json_type(definition: dict) -> dict:
+    typ = definition["type"]
+    nullable = definition.get("nullable", False)
+    if typ == "list":
+        result = {"type": "array", "items": {"type": "string"}}
+    elif typ in ("string", "integer", "boolean"):
+        result = {"type": typ}
+    else:
+        raise ValueError(f"Unbekannter Feldtyp: {typ}")
+    if nullable:
+        result["type"] = [result["type"], "null"]
+    return result
 
 
-def render_markdown(data, specs):
-    identifier = slug(
-        data["category"] + "-" +
-        data["manufacturer"] + "-" +
-        data["model"]
-    )
-
-    meta = {
-        "type": "hardware_model",
-        "id": identifier,
-        "manufacturer": data["manufacturer"],
-        "model": data["model"],
-        "category": data["category"],
-        "specs": specs
+def build_extraction_schema(schema: dict) -> dict:
+    # Field wrappers carry both value and a literal snippet from source.
+    properties = {}
+    for name, definition in schema["fields"].items():
+        properties[name] = {
+            "type": "object",
+            "properties": {
+                "value": typed_json_type(definition),
+                "evidence": {"type": "string"},
+            },
+            "required": ["value", "evidence"],
+            "additionalProperties": False,
+        }
+    return {
+        "type": "object",
+        "properties": {
+            "specs": {
+                "type": "object",
+                "properties": properties,
+                "required": list(properties),
+                "additionalProperties": False,
+            },
+            "warnings": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["specs", "warnings"],
+        "additionalProperties": False,
     }
 
-    frontmatter = yaml.safe_dump(
-        meta,
-        allow_unicode=True,
-        sort_keys=False
+
+def normalize_evidence(text: str) -> str:
+    return " ".join(text.strip().strip('"\'„“«»').split()).casefold()
+
+
+def empty_value(definition: dict):
+    return [] if definition["type"] == "list" else None
+
+
+def value_is_valid(value, definition: dict) -> bool:
+    typ = definition["type"]
+    if value is None:
+        return bool(definition.get("nullable", False))
+    if typ == "string":
+        return isinstance(value, str) and bool(value.strip())
+    if typ == "integer":
+        return type(value) is int and value >= 0
+    if typ == "boolean":
+        return type(value) is bool
+    if typ == "list":
+        return (isinstance(value, list) and
+                all(isinstance(x, str) and x.strip() for x in value))
+    return False
+
+
+def verify_value(name: str, value, evidence: str) -> str | None:
+    """Small conservative deterministic checks; not full factual verification."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        # Numeric match alone does not prove correct meaning/unit.
+        if not re.search(rf"(?<!\d){value}(?!\d)", evidence):
+            return f"{name}: Zahl {value} nicht im Beleg"
+    if isinstance(value, str):
+        # Some fields should preserve source typography, not invented slugs.
+        if name in ("interface", "dimensions_mm") and "_" in value:
+            return f"{name}: Wert unzulässig normalisiert"
+    if name == "vram_mib" and value is not None:
+        # Never equate MB to MiB silently. Only accept explicitly MiB.
+        if not re.search(r"\bMiB\b", evidence, flags=re.IGNORECASE):
+            return "vram_mib: Quellbeleg nennt MiB nicht eindeutig (MB ≠ MiB)"
+    return None
+
+
+def validate_specs(data: dict, schema: dict, source: str):
+    problems = []
+    specs = {}
+    evidence_report = {}
+    raw_specs = data.get("specs")
+    if not isinstance(raw_specs, dict):
+        raise ValueError("LLM lieferte specs nicht als Objekt")
+    src = normalize_evidence(source)
+    for name, definition in schema["fields"].items():
+        candidate = raw_specs.get(name)
+        if not isinstance(candidate, dict):
+            problems.append(f"{name}: fehlt in LLM-Ausgabe")
+            specs[name] = empty_value(definition)
+            continue
+        value = candidate.get("value")
+        evidence = candidate.get("evidence", "")
+        if not isinstance(evidence, str):
+            evidence = ""
+        evidence_report[name] = {"value": value, "evidence": evidence}
+        if not value_is_valid(value, definition):
+            problems.append(f"{name}: unzulässiger Datentyp/Wert: {value!r}")
+            specs[name] = empty_value(definition)
+            continue
+        if value is None or value == []:
+            specs[name] = value
+            if evidence.strip():
+                problems.append(f"{name}: leerer Wert mit unnötigem Beleg")
+            continue
+                    # Quellenbelege normalisieren
+        normalized = normalize_evidence(evidence)
+
+        # Standardmäßig ist der Beleg ungültig
+        evidence_valid = False
+
+        # Mehrere getrennte Zitate bei Listen unterstützen
+        quoted_parts = re.findall(
+            r'"([^"]+)"',
+            evidence
+        )
+
+        if definition["type"] == "list" and quoted_parts:
+            evidence_valid = all(
+                bool(normalize_evidence(part))
+                and normalize_evidence(part) in src
+                for part in quoted_parts
+            )
+        else:
+            evidence_valid = bool(
+                normalized and normalized in src
+            )
+
+        if not evidence_valid:
+            problems.append(
+                f"{name}: wörtlicher Quellenbeleg fehlt"
+            )
+            specs[name] = empty_value(definition)
+            continue
+        check = verify_value(name, value, normalized)
+        if check:
+            problems.append(check)
+            specs[name] = empty_value(definition)
+            continue
+        specs[name] = value
+    warnings = data.get("warnings", [])
+    if isinstance(warnings, list):
+        problems.extend(f"LLM: {w}" for w in warnings if isinstance(w, str) and w.strip())
+    else:
+        problems.append("warnings ist keine Liste")
+    # A valid markdown layout is not permission to approve a weak extraction.
+    if not any(v is not None and v != [] for v in specs.values()):
+        problems.append("Keine belegten Spezifikationen")
+    return specs, problems, evidence_report
+
+
+def slug(text: str) -> str:
+    plain = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "-", plain.lower()).strip("-")
+
+
+def render_markdown(category: str, manufacturer: str, model: str, specs: dict) -> str:
+    meta = {
+        "type": "hardware_model",
+        "id": slug(f"{category}-{manufacturer}-{model}"),
+        "manufacturer": manufacturer,
+        "model": model,
+        "category": category,
+        "specs": specs,
+    }
+    template_root = ROOT / "templates" / "hardware"
+    environment = Environment(
+        loader=FileSystemLoader(str(template_root)),
+        undefined=StrictUndefined, autoescape=False,
+        trim_blocks=True, lstrip_blocks=True,
+        keep_trailing_newline=True,
+    )
+    template = environment.get_template(f"{category}.md.j2")
+    md = template.render(
+        frontmatter=yaml.safe_dump(meta, allow_unicode=True, sort_keys=False).rstrip(),
+        manufacturer=manufacturer, model=model, specs=specs,
+    )
+    actual, _body, _title = parse_md(md.encode("utf-8"))
+    if actual != meta:
+        raise ValueError("Markdown-Frontmatter weicht vom validierten Objekt ab")
+    return md
+
+def extract_deterministic_gpu_fields(source: str) -> dict:
+    """Extrahiert eindeutig bezeichnete GPU-Daten."""
+
+    results = {}
+
+    patterns = {
+        "memory_clock_mhz": (
+            r"(?im)^Memory Speed:\s*(\d+)\s*MHz\s*$"
+        ),
+        "dimensions_mm": (
+            r"(?im)^Card Dimension:\s*"
+            r"(\d+\s*[x×]\s*\d+\s*[x×]\s*\d+\s*mm)\s*$"
+        ),
+    }
+
+    for field, pattern in patterns.items():
+        match = re.search(pattern, source)
+
+        if not match:
+            continue
+
+        value = match.group(1).strip()
+
+        if field == "memory_clock_mhz":
+            value = int(value)
+
+        results[field] = {
+            "value": value,
+            "evidence": match.group(0).strip(),
+        }
+
+    return results
+
+def main() -> int:
+    p = argparse.ArgumentParser(description="Retro-RAG LLM Import v0.2 – nur Dry-Run")
+    p.add_argument("file", type=Path)
+    p.add_argument("--model", default=DEFAULT_MODEL)
+    p.add_argument("--ollama-url", default=DEFAULT_URL)
+    args = p.parse_args()
+    print(f"Quelle: {args.file}\nModell: {args.model}\nModus: DRY-RUN")
+    source = read_document(args.file)
+    classification, cr = call_ollama(
+    args.ollama_url, args.model,
+    (
+        "Du klassifizierst technische Hardware-Datenblätter. "
+        "Bestimme die Hardwarekategorie anhand der beschriebenen "
+        "Funktion und der technischen Eigenschaften. "
+
+        "Verwende exakt die Kategorien des JSON-Schemas. "
+
+        "Beispiele zur Orientierung: "
+        "GPU, Graphics Processing Unit, Video Card oder "
+        "Graphics Card -> grafikkarte. "
+        "Processor oder Central Processing Unit -> cpu. "
+        "Motherboard oder Mainboard -> mainboard. "
+        "Network Adapter oder Ethernet Card -> netzwerkkarte. "
+
+        "Hersteller und Modell müssen im Dokument belegbar sein. "
+        "Unterscheide den Hersteller einer Grafikkarte vom "
+        "Hersteller des darauf verbauten Grafikchips. "
+
+        "Nutze unknown nur, wenn sich die Hardwarekategorie "
+        "aus dem Dokument nicht zuverlässig bestimmen lässt. "
+        "Erfinde keine Modellnummern oder Hersteller. "
+        "Antworte ausschließlich im vorgegebenen JSON-Schema."
+
+        "Bei Memory Speed übernimm den angegebenen MHz-Wert "
+        "ohne Interpretation als effektiven DDR-Takt. "
+        "Grafikchip-Hersteller und Grafikchip-Bezeichnung "
+        "sind getrennte Felder. "
+        "Beispiel: NVIDIA GeForce 210 bedeutet "
+        "gpu_manufacturer NVIDIA und gpu_chip GeForce 210. "
+        "Bei api_support verwende Bezeichnungen wie "
+        "DirectX 10.1 und OpenGL 3.1, sofern belegt. "
+        "Übernimm dokumentierte Abmessungen einschließlich "
+        "ihrer Einheit. "
+    ),
+    source,
+    CLASSIFY_SCHEMA,
+)
+    category = classification.get("category")
+    manufacturer = classification.get("manufacturer", "")
+    model = classification.get("model", "")
+    print("\nKLASSIFIKATION:", json.dumps(classification, ensure_ascii=False))
+    if category != "grafikkarte":
+        print("STATUS: REVIEW – v0.2 unterstützt derzeit nur grafikkarte")
+        return 2
+    if not all(isinstance(s, str) and s.strip() for s in (manufacturer, model)):
+        print("STATUS: REVIEW – Hersteller/Modell fehlt")
+        return 2
+    if manufacturer.casefold() not in source.casefold() or model.casefold() not in source.casefold():
+        print("STATUS: REVIEW – Hersteller/Modell nicht wörtlich im Dokument")
+        return 2
+    schema = load_schema(category)
+    extraction, er = call_ollama(
+        args.ollama_url, args.model,
+        "Extrahiere die technischen Eigenschaften für eine Retro-Grafikkarte. "
+        "Gib für jedes Feld ein Objekt mit value und evidence zurück. "
+        "evidence MUSS ein unveränderter, wörtlicher Ausschnitt des Dokuments sein, "
+        "ohne zusätzliche Anführungszeichen. "
+        "Bei nicht belegbaren Angaben: null (Listen: []) und evidence als leerer String. "
+        "Erfinde nichts und ergänze keine Produktvarianten. "
+        "Zahlen als Zahlen, Boolesches als true/false, Listen als Listen. "
+        "Werte, Einheiten und Namen nicht zu snake_case umschreiben. "
+        "WICHTIG: MB ist nicht dasselbe wie MiB. vram_mib nur setzen, wenn MiB "
+        "ausdrücklich belegt ist, sonst null mit Warnung. "
+        "Nenne erkennbare Widersprüche in warnings.",
+        source, build_extraction_schema(schema),
+    )
+    specs, issues, evidence = validate_specs(extraction, schema, source)
+    deterministic = extract_deterministic_gpu_fields(source)
+
+    print("\n===== REGELBASIERTE GEGENPRÜFUNG =====")
+
+    for field, result in deterministic.items():
+        candidate = result["value"]
+        current = specs.get(field)
+
+        print(
+            f"{field}: {candidate} "
+            f"[Quelle: {result['evidence']}]"
+        )
+
+        if current is None:
+            # Fehlende Werte aus eindeutigen Quellen ergänzen.
+            specs[field] = candidate
+
+            evidence[field] = {
+                "value": candidate,
+                "evidence": result["evidence"],
+                "origin": "deterministic"
+            }
+
+            print("  -> Fehlender Wert ergänzt")
+
+        elif current != candidate:
+            issues.append(
+                f"{field}: Widerspruch zwischen LLM "
+                f"({current!r}) und Quelle ({candidate!r})"
+            )
+
+            print("  -> REVIEW: Widerspruch")
+
+        else:
+            print("  -> Übereinstimmung")
+
+    # GPU-Hersteller und Chipbezeichnung trennen
+    gpu_line = re.search(
+        r"(?im)^Graphics Processing Unit:\s*"
+        r"(NVIDIA|AMD|ATI|Intel)\s+(.+?)\s*$",
+        source
     )
 
-    title = f'{data["manufacturer"]} {data["model"]}'
-    lines = [
-        "---",
-        frontmatter.rstrip(),
-        "---",
-        "",
-        f"# {title}",
-        "",
-        "## Technische Daten",
-        ""
-    ]
+    if gpu_line:
+        vendor = gpu_line.group(1)
+        chip = gpu_line.group(2).strip()
+        original = gpu_line.group(0).strip()
 
-    for field, value in specs.items():
-        lines.append(f"- {field}: {value}")
+        if specs.get("gpu_manufacturer") in (None, vendor):
+            if specs.get("gpu_chip") in (
+                None, chip, f"{vendor} {chip}"
+            ):
+                specs["gpu_manufacturer"] = vendor
+                specs["gpu_chip"] = chip
 
-    return "\n".join(lines) + "\n"
+                evidence["gpu_manufacturer"] = {
+                    "value": vendor,
+                    "evidence": original,
+                    "origin": "deterministic"
+                }
+                evidence["gpu_chip"] = {
+                    "value": chip,
+                    "evidence": original,
+                    "origin": "deterministic"
+                }
+            else:
+                issues.append(
+                    "GPU-Chip widerspricht dem Quelltext"
+                )
+        else:
+            issues.append(
+                "GPU-Hersteller widerspricht dem Quelltext"
+        )
 
+    # Grafik-APIs aus eindeutigen Quellenzeilen ableiten
+    api_patterns = {
+        "DirectX": r"(?im)^DirectX Version Support:\s*(\d+(?:\.\d+)*)\s*$",
+        "OpenGL": r"(?im)^OpenGL Version Support:\s*(\d+(?:\.\d+)*)\s*$",
+    }
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("file", type=Path)
-    args = parser.parse_args()
+    detected_apis = []
+    api_evidence = []
 
-    print(f"Quelldatei: {args.file}")
-    print(f"LLM: {MODEL}")
-    print("Modus: DRY-RUN\n")
+    for api, pattern in api_patterns.items():
+        match = re.search(pattern, source)
+        if match:
+            detected_apis.append(f"{api} {match.group(1)}")
+            api_evidence.append(match.group(0).strip())
 
-    source = read_document(args.file)
-    data, result = extract_with_llm(source)
-    specs, issues = validate_extraction(data, source)
+    if detected_apis:
+        existing = specs.get("api_support") or []
 
-    print("\n===== LLM-ROHDATEN =====")
-    print(json.dumps(
-        data,
-        indent=2,
-        ensure_ascii=False
-    ))
-    print("=======================\n")
+        # Nur bekannte Darstellungsformen automatisch ersetzen.
+        allowed_existing = set(detected_apis + api_evidence)
 
-    # Bei unklarer Klassifikation kein Markdown erzeugen.
-    if data.get("category") not in CATEGORIES:
-        print("REVIEW: unbekannte Hardwarekategorie")
-        print(json.dumps(data, indent=2, ensure_ascii=False))
-        return 2
-
-    markdown = render_markdown(data, specs)
-
-    try:
-        parse_md(markdown.encode("utf-8"))
-    except Exception as exc:
-        issues.append(f"Markdown-Validierung: {exc}")
-
-    print("===== ERZEUGTES MARKDOWN =====")
-    print(markdown)
-
-    print("===== VALIDIERUNG =====")
+        if set(existing).issubset(allowed_existing):
+            specs["api_support"] = detected_apis
+            evidence["api_support"] = {
+                "value": detected_apis,
+                "evidence": api_evidence,
+                "origin": "deterministic"
+            }
+        else:
+            issues.append(
+                "api_support: LLM und regelbasierte "
+                "Extraktion weichen voneinander ab"
+            )
+    # No need to fabricate claims from a weak model identity.
+    md = render_markdown(category, manufacturer, model, specs)
+    print("\n===== MARKDOWN-ENTWURF (nicht gespeichert) =====\n")
+    print(md)
+    print("===== PRÜFBERICHT =====")
     if issues:
         print("STATUS: REVIEW")
-        for issue in issues:
-            print(f"  - {issue}")
+        for item in issues:
+            print(" -", item)
     else:
-        print("STATUS: SCHEMA- UND BELEGPRÜFUNG OK")
-        print("Noch keine Freigabe für automatischen Upload.")
-
-    print("\n===== MODELLMETRIKEN =====")
-    print("Prompt-Tokens:", result.get("prompt_eval_count"))
-    print("Output-Tokens:", result.get("eval_count"))
-    print(
-        "Dauer:",
-        round(result.get("total_duration", 0) / 1e9, 2),
-        "Sekunden"
-    )
-
+        print("STATUS: STRUKTUR- UND BASISBELEGPRÜFUNG OK")
+        print("Keine automatische Freigabe: Fachprüfung und Dublettenprüfung stehen aus.")
+    print("Belege:")
+    print(json.dumps(evidence, ensure_ascii=False, indent=2))
+    print("Metriken:")
+    for label, raw in (("Klassifikation", cr), ("Extraktion", er)):
+        print(f" {label}: {raw.get('total_duration', 0)/1e9:.2f}s; "
+              f"Prompt {raw.get('prompt_eval_count', '?')}; "
+              f"Output {raw.get('eval_count', '?')}")
     return 2 if issues else 0
 
 
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except Exception as exc:
-        print(f"FEHLER: {exc}", file=sys.stderr)
+    except Exception as error:
+        print(f"FEHLER: {error}", file=sys.stderr)
         sys.exit(1)
-PY

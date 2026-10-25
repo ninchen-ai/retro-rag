@@ -1,0 +1,25 @@
+category: grafikkarte
+manufacturer: MSI
+model: GeForce 210
+
+expected_specs:
+  gpu_manufacturer: NVIDIA
+  gpu_chip: GeForce 210
+  interface: PCI Express x16 2.0
+  memory_type: DDR3
+  memory_bus_width_bit: 64
+  core_clock_mhz: 589
+  memory_clock_mhz: 1000
+  hdcp_support: true
+  dimensions_mm: 145 x 84 x 18 mm
+  api_support:
+    - DirectX 10.1
+    - OpenGL 3.1
+
+expected_unknown:
+  - vram_mib
+  - ramdac_mhz
+  - form_factor
+  - video_outputs
+  - supported_operating_systems
+  - drivers

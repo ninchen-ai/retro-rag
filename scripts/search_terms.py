@@ -9,6 +9,13 @@ TECHNICAL_SYNONYMS = {
     "pieptöne": ("beep codes", "beep"),
     "signalton": ("beep codes", "beep"),
     "signaltöne": ("beep codes", "beep"),
+
+    # Chipsätze und Speicher
+    "speicherarten": ("DRAM type",),
+    "rdram": ("DRAM type",),
+
+    # Erweiterungsschnittstellen
+    "agp": ("AGP interface",),
 }
 
 

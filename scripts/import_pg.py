@@ -20,6 +20,10 @@ CATEGORIES = {'grafikkarte','mainboard','cpu','ram','soundkarte','laufwerk','net
 CONDITIONS = {'neu','gut','gebraucht','defekt','unbekannt'}
 STATUSES = {'betriebsbereit','im_aufbau','eingelagert','defekt','unbekannt'}
 
+EXCLUDED_DIRECTORIES = {
+    "Import",
+    "Vorlagen",
+}
 
 def check(condition, message):
     if not condition:
@@ -142,7 +146,13 @@ class Cloud:
                         fxml = ET.fromstring(res.read())
                     fid = fxml.findtext('.//oc:fileid',namespaces=DAV)
                     check(fid and fid.strip(),f'Nextcloud fileid fehlt für {clean}')
-                    meta, body, title = parse_md(raw)
+                    try:
+                        meta, body, title = parse_md(raw)
+                    except (ValueError, UnicodeDecodeError, Exception) as exc:
+                        raise ValueError(
+                            f"Markdown-Validierungsfehler in Nextcloud-Datei: {clean} "
+                            f"(File-ID: {fid.strip()}): {exc}"
+                        ) from exc
                     docs.append({'path':clean,'fileid':fid.strip(),'raw':raw,'meta':meta,'body':body,'title':title})
         return docs
 

@@ -43,6 +43,37 @@ def parse_md(data):
         check(isinstance(meta.get('specs'),dict), 'specs muss ein Objekt sein')
         y = meta.get('year_released')
         check(y is None or (type(y) is int and 1940 <= y <= 2200), 'Ungültiges Erscheinungsjahr')
+        if 'chips' in meta:
+            chips = meta['chips']
+            check(isinstance(chips, list), 'chips muss eine Liste sein')
+
+            seen_chips = set()
+
+            for chip in chips:
+                check(isinstance(chip, dict), 'Ungültiger Chip-Eintrag')
+
+                for field in ('manufacturer', 'name', 'role'):
+                    value = chip.get(field)
+                    check(
+                        isinstance(value, str) and bool(value.strip()),
+                        f'Chip: {field} fehlt'
+                    )
+                    check(
+                        value == value.strip(),
+                        f'Chip: {field} enthält Rand-Leerzeichen'
+                    )
+
+                identity = (
+                    chip['manufacturer'].casefold(),
+                    chip['name'].casefold(),
+                    chip['role'].casefold(),
+                )
+
+                check(
+                    identity not in seen_chips,
+                    f'Doppelte Chip-Zuordnung: {identity}'
+                )
+                seen_chips.add(identity)
     elif kind == 'inventory_item':
         for key in ('asset_tag','component_model'):
             check(isinstance(meta.get(key),str) and meta[key].strip(), f'{key} fehlt')
@@ -190,6 +221,53 @@ def upsert_model(cur,d,document_id):
         (document_id,category[0],manufacturer_id,m['model'],m.get('variant'),m.get('year_released'),json.dumps(m['specs']),d['body']))
     return cur.fetchone()[0]
 
+def upsert_chip(cur, manufacturer, name):
+    """Legt einen Chip an oder ermittelt seine vorhandene ID."""
+
+    cur.execute("""
+        INSERT INTO hw.manufacturer (name)
+        VALUES (%s)
+        ON CONFLICT (name)
+        DO UPDATE SET name = EXCLUDED.name
+        RETURNING id
+    """, (manufacturer,))
+
+    manufacturer_id = cur.fetchone()[0]
+
+    cur.execute("""
+        INSERT INTO hw.chip (manufacturer_id, name)
+        VALUES (%s, %s)
+        ON CONFLICT (manufacturer_id, name)
+        DO UPDATE SET name = EXCLUDED.name
+        RETURNING id
+    """, (manufacturer_id, name))
+
+    return cur.fetchone()[0]
+
+
+def sync_model_chips(cur, model_id, chips):
+    """Synchronisiert die Chipbeziehungen eines Hardwaremodells."""
+
+    for chip in chips:
+        chip_id = upsert_chip(
+            cur,
+            chip["manufacturer"],
+            chip["name"],
+        )
+
+        cur.execute("""
+            INSERT INTO hw.component_chip (
+                component_model_id,
+                chip_id,
+                role
+            )
+            VALUES (%s, %s, %s)
+            ON CONFLICT DO NOTHING
+        """, (
+            model_id,
+            chip_id,
+            chip["role"],
+        ))
 
 def upsert_item(cur,d,docid,modelids):
     m=d['meta']
@@ -269,6 +347,26 @@ def main():
                             models[key] = row[0]
                             continue
                     models[key] = upsert_model(cur,d,docids[key])
+
+                # Chipbeziehungen aller Hardwaremodelle synchronisieren.
+                # Auch unveränderte Modelle werden berücksichtigt.
+                for d in docs:
+                    if d['meta']['type'] != 'hardware_model':
+                        continue
+
+                    chips = d['meta'].get('chips', [])
+                    if not chips:
+                        continue
+
+                    key = d['meta']['id']
+
+                    sync_model_chips(
+                        cur,
+                        models[key],
+                        chips,
+                    )
+
+                # Inventarobjekte importieren
                 for d in docs:
                     if d['meta']['type']=='inventory_item':
                         key = d['meta']['id']
@@ -277,6 +375,8 @@ def main():
                             if cur.fetchone():
                                 continue
                         upsert_item(cur,d,docids[key],models)
+
+                # Systeme importieren
                 for d in docs:
                     if d['meta']['type']=='system':
                         key = d['meta']['id']
@@ -285,6 +385,7 @@ def main():
                             if cur.fetchone():
                                 continue
                         upsert_system(cur,d,docids[key])
+
                 print(f'Geändert/neu: {len(docs)-len(unchanged)} | Übersprungen: {len(unchanged)}')
     print('COMMIT: Dokumente, Modelle, Inventar und Systeme synchronisiert.')
     print('Hinweis: Entfernte Dokumente/Komponenten werden v0.2 bewusst NICHT automatisch gelöscht.')

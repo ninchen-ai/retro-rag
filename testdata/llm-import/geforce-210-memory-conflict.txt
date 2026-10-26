@@ -1,0 +1,15 @@
+MSI GeForce 210
+
+Graphics Processing Unit: NVIDIA GeForce 210
+Interface: PCI Express x16 2.0
+Core Clock: 589 MHz
+Memory Speed: 1000 MHz
+Memory Size: 1024 MB
+Memory Type: DDR3
+Memory Bus: 64 bits
+HDCP Support: Yes
+Card Dimension: 145 x 84 x 18 mm
+DirectX Version Support: 10.1
+OpenGL Version Support: 3.1
+
+Memory Speed: 1200 MHz

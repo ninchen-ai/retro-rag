@@ -18,7 +18,11 @@ from urllib.request import Request, urlopen
 import pymupdf
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
-
+from llm_import.source_checks import check_source
+from llm_import.normalizers import (
+    extract_deterministic_gpu_fields,
+    normalize_gpu_identity_and_apis,
+)
 from import_pg import CATEGORIES, parse_md
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -278,39 +282,6 @@ def render_markdown(category: str, manufacturer: str, model: str, specs: dict) -
         raise ValueError("Markdown-Frontmatter weicht vom validierten Objekt ab")
     return md
 
-def extract_deterministic_gpu_fields(source: str) -> dict:
-    """Extrahiert eindeutig bezeichnete GPU-Daten."""
-
-    results = {}
-
-    patterns = {
-        "memory_clock_mhz": (
-            r"(?im)^Memory Speed:\s*(\d+)\s*MHz\s*$"
-        ),
-        "dimensions_mm": (
-            r"(?im)^Card Dimension:\s*"
-            r"(\d+\s*[x×]\s*\d+\s*[x×]\s*\d+\s*mm)\s*$"
-        ),
-    }
-
-    for field, pattern in patterns.items():
-        match = re.search(pattern, source)
-
-        if not match:
-            continue
-
-        value = match.group(1).strip()
-
-        if field == "memory_clock_mhz":
-            value = int(value)
-
-        results[field] = {
-            "value": value,
-            "evidence": match.group(0).strip(),
-        }
-
-    return results
-
 def main() -> int:
     p = argparse.ArgumentParser(description="Retro-RAG LLM Import v0.2 – nur Dry-Run")
     p.add_argument("file", type=Path)
@@ -388,11 +359,60 @@ def main() -> int:
         source, build_extraction_schema(schema),
     )
     specs, issues, evidence = validate_specs(extraction, schema, source)
+    # Unabhängige Sicherheitsprüfung des Quelldokuments
+    source_findings = check_source(
+        source,
+        manufacturer,
+        model,
+    )
+    # Felder mit widersprüchlichen Quellenangaben sperren.
+    conflicting_fields = {
+        finding["field"]
+        for finding in source_findings
+        if finding["code"] == "CONFLICTING_VALUES"
+    }
+
+    if source_findings:
+        print("\n===== QUELLEN-SICHERHEITSPRÜFUNG =====")
+
+        for finding in source_findings:
+            code = finding["code"]
+            field = finding.get("field", "document")
+
+            issues.append(
+                f"{code}: {field} – {finding}"
+            )
+
+            print(f"REVIEW: {code} ({field})")
     deterministic = extract_deterministic_gpu_fields(source)
+
+    # Widersprüchliche Felder dürfen keinen Einzelwert behalten.
+    for finding in source_findings:
+        if finding["code"] != "CONFLICTING_VALUES":
+            continue
+
+        field = finding["field"]
+
+        if field in specs:
+            specs[field] = None
+            evidence[field] = {
+                "value": None,
+                "evidence": "",
+                "origin": "conflict",
+                "candidates": finding["values"],
+            }
 
     print("\n===== REGELBASIERTE GEGENPRÜFUNG =====")
 
     for field, result in deterministic.items():
+
+        if field in conflicting_fields:
+            print(
+                f"{field}: REVIEW – widersprüchliche "
+                "Quellenwerte, automatische Ergänzung gesperrt"
+            )
+            continue
+
         candidate = result["value"]
         current = specs.get(field)
 
@@ -414,87 +434,67 @@ def main() -> int:
             print("  -> Fehlender Wert ergänzt")
 
         elif current != candidate:
-            issues.append(
-                f"{field}: Widerspruch zwischen LLM "
-                f"({current!r}) und Quelle ({candidate!r})"
+            # Gleiche Abmessungen mit/ohne Einheit akzeptieren.
+            same_dimensions = (
+                field == "dimensions_mm"
+                and isinstance(current, str)
+                and isinstance(candidate, str)
+                and re.sub(
+                    r"\s+", "",
+                    current.casefold().removesuffix("mm")
+                )
+                == re.sub(
+                    r"\s+", "",
+                    candidate.casefold().removesuffix("mm")
+                )
             )
 
-            print("  -> REVIEW: Widerspruch")
+            if same_dimensions:
+                specs[field] = candidate
+
+                evidence[field] = {
+                    "value": candidate,
+                    "evidence": result["evidence"],
+                    "origin": "deterministic"
+                }
+
+                print("  -> Darstellung normalisiert")
+
+            else:
+                issues.append(
+                    f"{field}: Widerspruch zwischen LLM "
+                    f"({current!r}) und Quelle ({candidate!r})"
+                )
+
+                print("  -> REVIEW: Widerspruch")
 
         else:
             print("  -> Übereinstimmung")
 
-    # GPU-Hersteller und Chipbezeichnung trennen
-    gpu_line = re.search(
-        r"(?im)^Graphics Processing Unit:\s*"
-        r"(NVIDIA|AMD|ATI|Intel)\s+(.+?)\s*$",
-        source
+    normalize_gpu_identity_and_apis(
+        source, specs, evidence, issues
     )
 
-    if gpu_line:
-        vendor = gpu_line.group(1)
-        chip = gpu_line.group(2).strip()
-        original = gpu_line.group(0).strip()
+    # Letzte Sicherheitsprüfung nach allen Normalisierungen.
+    # Konfliktfelder dürfen niemals mit einem Einzelwert erscheinen.
+    for finding in source_findings:
+        if finding["code"] != "CONFLICTING_VALUES":
+            continue
 
-        if specs.get("gpu_manufacturer") in (None, vendor):
-            if specs.get("gpu_chip") in (
-                None, chip, f"{vendor} {chip}"
-            ):
-                specs["gpu_manufacturer"] = vendor
-                specs["gpu_chip"] = chip
+        field = finding["field"]
 
-                evidence["gpu_manufacturer"] = {
-                    "value": vendor,
-                    "evidence": original,
-                    "origin": "deterministic"
-                }
-                evidence["gpu_chip"] = {
-                    "value": chip,
-                    "evidence": original,
-                    "origin": "deterministic"
-                }
-            else:
-                issues.append(
-                    "GPU-Chip widerspricht dem Quelltext"
-                )
-        else:
-            issues.append(
-                "GPU-Hersteller widerspricht dem Quelltext"
-        )
+        if field not in specs:
+            continue
 
-    # Grafik-APIs aus eindeutigen Quellenzeilen ableiten
-    api_patterns = {
-        "DirectX": r"(?im)^DirectX Version Support:\s*(\d+(?:\.\d+)*)\s*$",
-        "OpenGL": r"(?im)^OpenGL Version Support:\s*(\d+(?:\.\d+)*)\s*$",
-    }
+        specs[field] = None
 
-    detected_apis = []
-    api_evidence = []
+        evidence[field] = {
+            "value": None,
+            "evidence": "",
+            "origin": "conflict",
+            "candidates": finding["values"],
+        }
 
-    for api, pattern in api_patterns.items():
-        match = re.search(pattern, source)
-        if match:
-            detected_apis.append(f"{api} {match.group(1)}")
-            api_evidence.append(match.group(0).strip())
-
-    if detected_apis:
-        existing = specs.get("api_support") or []
-
-        # Nur bekannte Darstellungsformen automatisch ersetzen.
-        allowed_existing = set(detected_apis + api_evidence)
-
-        if set(existing).issubset(allowed_existing):
-            specs["api_support"] = detected_apis
-            evidence["api_support"] = {
-                "value": detected_apis,
-                "evidence": api_evidence,
-                "origin": "deterministic"
-            }
-        else:
-            issues.append(
-                "api_support: LLM und regelbasierte "
-                "Extraktion weichen voneinander ab"
-            )
     # No need to fabricate claims from a weak model identity.
     md = render_markdown(category, manufacturer, model, specs)
     print("\n===== MARKDOWN-ENTWURF (nicht gespeichert) =====\n")

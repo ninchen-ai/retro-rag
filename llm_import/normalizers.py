@@ -110,3 +110,38 @@ def normalize_gpu_identity_and_apis(source, specs, evidence, issues):
                 "api_support: LLM und regelbasierte "
                 "Extraktion weichen voneinander ab"
             )
+def reconcile_deterministic_value(
+    field_name: str,
+    current,
+    candidate,
+    source_evidence: str,
+    specs: dict,
+    evidence: dict,
+    issues: list,
+) -> bool:
+    """Sperrt ein Feld bei Abweichung zwischen LLM und Quellenprüfung.
+
+    Rückgabe:
+        True:  Widerspruch erkannt und Feld gesperrt.
+        False: Kein Widerspruch.
+    """
+
+    if current == candidate:
+        return False
+
+    issues.append(
+        f"{field_name}: Widerspruch zwischen LLM "
+        f"({current!r}) und Quelle ({candidate!r})"
+    )
+
+    specs[field_name] = None
+
+    evidence[field_name] = {
+        "value": None,
+        "evidence": "",
+        "origin": "validation_conflict",
+        "candidates": [current, candidate],
+        "source_evidence": source_evidence,
+    }
+
+    return True

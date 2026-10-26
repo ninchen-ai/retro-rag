@@ -14,6 +14,7 @@ import sys
 import unicodedata
 from pathlib import Path
 from urllib.request import Request, urlopen
+from llm_import.review import ReviewReport, add_legacy_issues
 
 import pymupdf
 import yaml
@@ -22,6 +23,7 @@ from llm_import.source_checks import check_source
 from llm_import.normalizers import (
     extract_deterministic_gpu_fields,
     normalize_gpu_identity_and_apis,
+    reconcile_deterministic_value,
 )
 from import_pg import CATEGORIES, parse_md
 
@@ -359,6 +361,7 @@ def main() -> int:
         source, build_extraction_schema(schema),
     )
     specs, issues, evidence = validate_specs(extraction, schema, source)
+    review = ReviewReport()
     # Unabhängige Sicherheitsprüfung des Quelldokuments
     source_findings = check_source(
         source,
@@ -378,6 +381,18 @@ def main() -> int:
         for finding in source_findings:
             code = finding["code"]
             field = finding.get("field", "document")
+
+            review.add(
+                code=code,
+                severity=(
+                    "error"
+                    if code == "CONFLICTING_VALUES"
+                    else "warning"
+                ),
+                field_name=field,
+                message=str(finding),
+                details=finding,
+            )
 
             issues.append(
                 f"{code}: {field} – {finding}"
@@ -461,12 +476,20 @@ def main() -> int:
                 print("  -> Darstellung normalisiert")
 
             else:
-                issues.append(
-                    f"{field}: Widerspruch zwischen LLM "
-                    f"({current!r}) und Quelle ({candidate!r})"
+                reconcile_deterministic_value(
+                    field_name=field,
+                    current=current,
+                    candidate=candidate,
+                    source_evidence=result["evidence"],
+                    specs=specs,
+                    evidence=evidence,
+                    issues=issues,
                 )
 
-                print("  -> REVIEW: Widerspruch")
+                print(
+                    "  -> REVIEW: Widerspruch, "
+                    "Feld gesperrt"
+                )
 
         else:
             print("  -> Übereinstimmung")
@@ -507,6 +530,14 @@ def main() -> int:
     else:
         print("STATUS: STRUKTUR- UND BASISBELEGPRÜFUNG OK")
         print("Keine automatische Freigabe: Fachprüfung und Dublettenprüfung stehen aus.")
+        # Noch offene Meldungen in den strukturierten Bericht übernehmen.
+    add_legacy_issues(
+        review,
+        issues,
+        source_findings,
+    )
+
+    review.print_report()
     print("Belege:")
     print(json.dumps(evidence, ensure_ascii=False, indent=2))
     print("Metriken:")

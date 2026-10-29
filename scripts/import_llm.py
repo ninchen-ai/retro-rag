@@ -32,6 +32,8 @@ from llm_import.validation import (
         classify_gpu_field_coverage,
 )
 
+from llm_import.result import build_import_result
+from llm_import.document import extract_document_text
 import pymupdf
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
@@ -59,29 +61,23 @@ CLASSIFY_SCHEMA = {
     "additionalProperties": False,
 }
 
+def read_document_bytes(path: Path) -> tuple[bytes, str]:
+    """Liest eine lokale Datei und extrahiert ihren Text."""
 
-def read_document(path: Path) -> str:
     if not path.is_file():
         raise ValueError(f"Datei nicht gefunden: {path}")
-    if path.stat().st_size > MAX_BYTES:
-        raise ValueError("Datei über 50 MiB")
-    suffix = path.suffix.lower()
-    if suffix in (".txt", ".md"):
-        text = path.read_text(encoding="utf-8-sig")
-    elif suffix == ".pdf":
-        parts = []
-        with pymupdf.open(path) as doc:
-            if doc.needs_pass:
-                raise ValueError("Passwortgeschützte PDF: Review/OCR nötig")
-            for page_number, page in enumerate(doc, 1):
-                parts.append(f"[PDF-Seite {page_number}]\n{page.get_text('text', sort=True)}")
-        text = "\n".join(parts)
-    else:
-        raise ValueError("Nur .pdf, .txt und .md unterstützt")
-    if not text.strip():
-        raise ValueError("Kein Text: Review/OCR erforderlich")
-    if len(text) > MAX_CHARS:
-        raise ValueError("Mehr als 18.000 Zeichen: abschnittsweise Verarbeitung erforderlich")
+
+    with path.open("rb") as handle:
+        data = handle.read(MAX_BYTES + 1)
+
+    text = extract_document_text(data, path.name)
+
+    return data, text
+
+def read_document(path: Path) -> str:
+    """Kompatibilität mit bestehenden Aufrufern."""
+
+    _, text = read_document_bytes(path)
     return text
 
 
@@ -355,7 +351,7 @@ def main() -> int:
     p.add_argument("--ollama-url", default=DEFAULT_URL)
     args = p.parse_args()
     print(f"Quelle: {args.file}\nModell: {args.model}\nModus: DRY-RUN")
-    source = read_document(args.file)
+    source_bytes, source = read_document_bytes(args.file)
     classification, cr = call_ollama(
     args.ollama_url, args.model,
     (
@@ -628,6 +624,20 @@ def main() -> int:
         evidence=evidence,
         source=source,
     )
+    import_result = build_import_result(
+        source_path=args.file,
+        source_bytes=source_bytes,
+        model=args.model,
+        classification=classification,
+        markdown=md,
+        review=central_review,
+        evidence=evidence,
+    )
+    if import_result["review"]["status"] != central_review.status:
+        raise RuntimeError(
+            "Import-Ergebnis und zentraler Review-Status "
+            "weichen voneinander ab"
+        )
     legacy_technical, legacy_llm = separate_legacy_issues(issues)
 
     #print("\n===== STRUKTURIERTE VALIDIERUNGSFEHLER =====")

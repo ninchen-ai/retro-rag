@@ -107,21 +107,44 @@ def main():
         passed += int(ok)
         failed += int(not ok)
 
+    # Ausschließlich die verbindliche zentrale Review-Entscheidung lesen.
     status_match = re.search(
-        r"STATUS:\s*(\w+)",
+        r"^===== ZENTRALER REVIEW-BERICHT =====\s*\n"
+        r"STATUS:\s*(VALIDATED|REVIEW)\s*$",
         output,
+        flags=re.MULTILINE,
     )
-    workflow_status = (
-        status_match.group(1)
-        if status_match
-        else "UNBEKANNT"
+
+    if not status_match:
+        print("FEHLER: Zentraler Review-Status nicht gefunden")
+        return 1
+
+    workflow_status = status_match.group(1)
+
+    expected_returncode = (
+        0 if workflow_status == "VALIDATED" else 2
     )
+
+    if result.returncode != expected_returncode:
+        print(
+            "FEHLER: Exit-Code widerspricht zentralem Status: "
+            f"Status={workflow_status}, "
+            f"Exit-Code={result.returncode}"
+        )
+        return 1
 
     print("\n===== ERGEBNIS =====")
     print(f"Prüfungen bestanden: {passed}")
     print(f"Prüfungen fehlgeschlagen: {failed}")
     print(f"Feldgenauigkeit: {passed / (passed + failed) * 100:.1f}%")
     print(f"Workflow-Status: {workflow_status}")
+
+    if workflow_status != "VALIDATED":
+        print(
+            "FEHLER: Positives Testdokument wurde "
+            "nicht technisch validiert"
+        )
+        return 1
 
     if failed:
         print("\nBENCHMARK: NICHT BESTANDEN")

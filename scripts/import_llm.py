@@ -14,7 +14,23 @@ import sys
 import unicodedata
 from pathlib import Path
 from urllib.request import Request, urlopen
-from llm_import.review import ReviewReport, add_legacy_issues
+from llm_import.review import (
+    ReviewReport,
+    add_legacy_issues,
+    evaluate_final_fields,
+    ValidationIssue,
+    evaluate_final_fields,
+    evaluate_final_review,
+    separate_legacy_issues,
+)
+
+from llm_import.validation import (
+    normalize_evidence,
+    empty_value,
+    value_is_valid,
+    verify_value,
+        classify_gpu_field_coverage,
+)
 
 import pymupdf
 import yaml
@@ -137,53 +153,23 @@ def build_extraction_schema(schema: dict) -> dict:
         "additionalProperties": False,
     }
 
+def reject_field(specs, evidence_report, name, definition):
+    """Verwirft einen LLM-Wert konsistent."""
+    value = empty_value(definition)
 
-def normalize_evidence(text: str) -> str:
-    return " ".join(text.strip().strip('"\'„“«»').split()).casefold()
-
-
-def empty_value(definition: dict):
-    return [] if definition["type"] == "list" else None
-
-
-def value_is_valid(value, definition: dict) -> bool:
-    typ = definition["type"]
-    if value is None:
-        return bool(definition.get("nullable", False))
-    if typ == "string":
-        return isinstance(value, str) and bool(value.strip())
-    if typ == "integer":
-        return type(value) is int and value >= 0
-    if typ == "boolean":
-        return type(value) is bool
-    if typ == "list":
-        return (isinstance(value, list) and
-                all(isinstance(x, str) and x.strip() for x in value))
-    return False
-
-
-def verify_value(name: str, value, evidence: str) -> str | None:
-    """Small conservative deterministic checks; not full factual verification."""
-    if isinstance(value, int) and not isinstance(value, bool):
-        # Numeric match alone does not prove correct meaning/unit.
-        if not re.search(rf"(?<!\d){value}(?!\d)", evidence):
-            return f"{name}: Zahl {value} nicht im Beleg"
-    if isinstance(value, str):
-        # Some fields should preserve source typography, not invented slugs.
-        if name in ("interface", "dimensions_mm") and "_" in value:
-            return f"{name}: Wert unzulässig normalisiert"
-    if name == "vram_mib" and value is not None:
-        # Never equate MB to MiB silently. Only accept explicitly MiB.
-        if not re.search(r"\bMiB\b", evidence, flags=re.IGNORECASE):
-            return "vram_mib: Quellbeleg nennt MiB nicht eindeutig (MB ≠ MiB)"
-    return None
-
+    specs[name] = value
+    evidence_report[name] = {
+        "value": value,
+        "evidence": "",
+        "origin": "rejected",
+    }
 
 def validate_specs(data: dict, schema: dict, source: str):
     problems = []
     specs = {}
     evidence_report = {}
     raw_specs = data.get("specs")
+    validation_issues = []
     if not isinstance(raw_specs, dict):
         raise ValueError("LLM lieferte specs nicht als Objekt")
     src = normalize_evidence(source)
@@ -191,7 +177,16 @@ def validate_specs(data: dict, schema: dict, source: str):
         candidate = raw_specs.get(name)
         if not isinstance(candidate, dict):
             problems.append(f"{name}: fehlt in LLM-Ausgabe")
-            specs[name] = empty_value(definition)
+
+            validation_issues.append(
+                ValidationIssue(
+                    code="FIELD_MISSING",
+                    field=name,
+                    message="Feld fehlt in der LLM-Ausgabe",
+                )
+            )
+
+            reject_field(specs, evidence_report, name, definition)
             continue
         value = candidate.get("value")
         evidence = candidate.get("evidence", "")
@@ -199,15 +194,49 @@ def validate_specs(data: dict, schema: dict, source: str):
             evidence = ""
         evidence_report[name] = {"value": value, "evidence": evidence}
         if not value_is_valid(value, definition):
-            problems.append(f"{name}: unzulässiger Datentyp/Wert: {value!r}")
-            specs[name] = empty_value(definition)
+            problems.append(
+                f"{name}: unzulässiger Datentyp/Wert: {value!r}"
+            )
+
+            validation_issues.append(
+                ValidationIssue(
+                    code="INVALID_VALUE",
+                    field=name,
+                    message=f"Unzulässiger Datentyp oder Wert: {value!r}",
+                )
+            )
+
+            reject_field(
+                specs,
+                evidence_report,
+                name,
+                definition,
+            )
             continue
         if value is None or value == []:
             specs[name] = value
+
             if evidence.strip():
-                problems.append(f"{name}: leerer Wert mit unnötigem Beleg")
+                problems.append(
+                    f"{name}: leerer Wert mit unnötigem Beleg"
+                )
+
+                validation_issues.append(
+                    ValidationIssue(
+                        code="UNEXPECTED_EVIDENCE",
+                        field=name,
+                        message="Leerer Wert mit unnötigem Quellenbeleg",
+                    )
+                )
+
+                evidence_report[name] = {
+                    "value": value,
+                    "evidence": "",
+                    "origin": "rejected",
+                }
+
             continue
-                    # Quellenbelege normalisieren
+        # Quellenbelege normalisieren
         normalized = normalize_evidence(evidence)
 
         # Standardmäßig ist der Beleg ungültig
@@ -234,12 +263,30 @@ def validate_specs(data: dict, schema: dict, source: str):
             problems.append(
                 f"{name}: wörtlicher Quellenbeleg fehlt"
             )
-            specs[name] = empty_value(definition)
+
+            validation_issues.append(
+                ValidationIssue(
+                    code="EVIDENCE_NOT_FOUND",
+                    field=name,
+                    message="Wörtlicher Quellenbeleg fehlt",
+                )
+            )
+
+            reject_field(specs, evidence_report, name, definition)
             continue
         check = verify_value(name, value, normalized)
         if check:
             problems.append(check)
-            specs[name] = empty_value(definition)
+
+            validation_issues.append(
+                ValidationIssue(
+                    code="VALUE_VERIFICATION_FAILED",
+                    field=name,
+                    message=check,
+                )
+            )
+
+            reject_field(specs, evidence_report, name, definition)
             continue
         specs[name] = value
     warnings = data.get("warnings", [])
@@ -247,10 +294,27 @@ def validate_specs(data: dict, schema: dict, source: str):
         problems.extend(f"LLM: {w}" for w in warnings if isinstance(w, str) and w.strip())
     else:
         problems.append("warnings ist keine Liste")
-    # A valid markdown layout is not permission to approve a weak extraction.
+
+        validation_issues.append(
+            ValidationIssue(
+                code="INVALID_WARNINGS_FORMAT",
+                field=None,
+                message="LLM warnings muss eine Liste sein",
+            )
+        )
+
+    # Mindestens eine belegte Spezifikation erforderlich
     if not any(v is not None and v != [] for v in specs.values()):
         problems.append("Keine belegten Spezifikationen")
-    return specs, problems, evidence_report
+
+        validation_issues.append(
+            ValidationIssue(
+                code="NO_VERIFIED_SPECS",
+                field=None,
+                message="Keine belegten Spezifikationen vorhanden",
+            )
+        )
+    return specs, problems, evidence_report, validation_issues
 
 
 def slug(text: str) -> str:
@@ -360,7 +424,7 @@ def main() -> int:
         "Nenne erkennbare Widersprüche in warnings.",
         source, build_extraction_schema(schema),
     )
-    specs, issues, evidence = validate_specs(extraction, schema, source)
+    specs, issues, evidence, validation_issues = validate_specs(extraction, schema, source)
     review = ReviewReport()
     # Unabhängige Sicherheitsprüfung des Quelldokuments
     source_findings = check_source(
@@ -399,6 +463,8 @@ def main() -> int:
             )
 
             print(f"REVIEW: {code} ({field})")
+    # Ab hier neu erzeugte Normalisierungsfehler getrennt erfassen.
+    normalization_issue_start = len(issues)
     deterministic = extract_deterministic_gpu_fields(source)
 
     # Widersprüchliche Felder dürfen keinen Einzelwert behalten.
@@ -498,6 +564,17 @@ def main() -> int:
         source, specs, evidence, issues
     )
 
+    # Technische Normalisierungsfehler in die zentrale
+    # Review-Entscheidung übernehmen.
+    for message in issues[normalization_issue_start:]:
+        validation_issues.append(
+            ValidationIssue(
+                code="NORMALIZATION_CONFLICT",
+                field=None,
+                message=message,
+            )
+        )
+
     # Letzte Sicherheitsprüfung nach allen Normalisierungen.
     # Konfliktfelder dürfen niemals mit einem Einzelwert erscheinen.
     for finding in source_findings:
@@ -538,6 +615,67 @@ def main() -> int:
     )
 
     review.print_report()
+
+    final_review = evaluate_final_fields(specs, evidence)
+
+    print("\n===== FINALE FELDKONSISTENZ =====")
+    print(f"STATUS: {final_review.status}")
+
+    central_review = evaluate_final_review(
+        validation_issues=validation_issues,
+        source_findings=source_findings,
+        specs=specs,
+        evidence=evidence,
+        source=source,
+    )
+    legacy_technical, legacy_llm = separate_legacy_issues(issues)
+
+    #print("\n===== STRUKTURIERTE VALIDIERUNGSFEHLER =====")
+
+    #for issue in validation_issues:
+    #    print(
+    #        f"{issue.code} "
+    #        f"({issue.field}): "
+    #        f"resolved={issue.resolved}"
+    #    )
+
+    #print("\n===== LEGACY-ABGLEICH (DIAGNOSE) =====")
+    #print(f"Technische Legacy-Meldungen: {len(legacy_technical)}")
+    #print(f"LLM-Diagnosen: {len(legacy_llm)}")
+
+    for message in legacy_technical:
+        print(f"LEGACY_TECHNICAL: {message}")
+
+    print(f"Zentraler Status: {central_review.status}")
+
+    print("\n===== ZENTRALER REVIEW-BERICHT =====")
+    print(f"STATUS: {central_review.status}")
+
+    for finding in central_review.findings:
+        print(
+            f"[{finding.severity.upper()}] "
+            f"{finding.code} ({finding.field}): "
+            f"{finding.message}"
+        )
+
+    coverage = classify_gpu_field_coverage(specs)
+
+    print("\n===== SEMANTISCHE PRÜFABDECKUNG =====")
+
+    for field, status in sorted(coverage.items()):
+        print(f"{field}: {status}")
+
+    unverified_fields = [
+        field
+        for field, status in coverage.items()
+        if status == "UNVERIFIED"
+    ]
+
+    print(
+        f"Nicht abgedeckte, belegte Felder: "
+        f"{len(unverified_fields)}"
+    )
+
     print("Belege:")
     print(json.dumps(evidence, ensure_ascii=False, indent=2))
     print("Metriken:")
@@ -545,7 +683,9 @@ def main() -> int:
         print(f" {label}: {raw.get('total_duration', 0)/1e9:.2f}s; "
               f"Prompt {raw.get('prompt_eval_count', '?')}; "
               f"Output {raw.get('eval_count', '?')}")
-    return 2 if issues else 0
+    # Technischer Status ausschließlich aus dem zentralen Review-Bericht.
+    # Menschliche Freigabe und Dublettenprüfung bleiben erforderlich.
+    return 2 if central_review.requires_review else 0
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ import json
 import re
 import sys
 import unicodedata
+import hashlib
 from pathlib import Path
 from urllib.request import Request, urlopen
 from llm_import.review import (
@@ -45,6 +46,8 @@ from llm_import.normalizers import (
 )
 from import_pg import CATEGORIES, parse_md
 from llm_import.classification import validate_classification
+from contextlib import redirect_stdout
+from io import StringIO
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MODEL = "qwen3.5:4b"
@@ -402,44 +405,19 @@ def classify_document(
 
     return classification, metrics, findings
 
-def main() -> int:
-    p = argparse.ArgumentParser(description="Retro-RAG LLM Import v0.2 – nur Dry-Run")
-    p.add_argument("file", type=Path)
-    p.add_argument("--model", default=DEFAULT_MODEL)
-    p.add_argument("--ollama-url", default=DEFAULT_URL)
-    args = p.parse_args()
-    print(f"Quelle: {args.file}\nModell: {args.model}\nModus: DRY-RUN")
-    source_bytes, source = read_document_bytes(args.file)
-
-    classification, cr, classification_findings = classify_document(
-        source=source,
-        model=args.model,
-        ollama_url=args.ollama_url,
-    )
-    category = classification.get("category")
-    manufacturer = classification.get("manufacturer", "")
-    model = classification.get("model", "")
-    print("\nKLASSIFIKATION:", json.dumps(classification, ensure_ascii=False))
-    classification_findings = validate_classification(
-        classification,
-        source,
-    )
-
-    if classification_findings:
-        print("\n===== KLASSIFIKATIONS-REVIEW =====")
-        print("STATUS: REVIEW")
-
-        for finding in classification_findings:
-            print(
-                f"[{finding['severity'].upper()}] "
-                f"{finding['code']} ({finding['field']}): "
-                f"{finding['message']}"
-            )
-
-        return 2
+def extract_gpu_document(
+    source: str,
+    category: str,
+    manufacturer: str,
+    model_name: str,
+    model: str,
+    ollama_url: str,
+):
+    """GPU-Extraktion und Validierung (Übergangsfunktion)."""
+    # Fachliche Verarbeitung aus dem bisherigen main().
     schema = load_schema(category)
     extraction, er = call_ollama(
-        args.ollama_url, args.model,
+        ollama_url, model,
         "Extrahiere die technischen Eigenschaften für eine Retro-Grafikkarte. "
         "Gib für jedes Feld ein Objekt mit value und evidence zurück. "
         "evidence MUSS ein unveränderter, wörtlicher Ausschnitt des Dokuments sein, "
@@ -459,7 +437,7 @@ def main() -> int:
     source_findings = check_source(
         source,
         manufacturer,
-        model,
+        model_name,
     )
     # Felder mit widersprüchlichen Quellenangaben sperren.
     conflicting_fields = {
@@ -625,30 +603,78 @@ def main() -> int:
         }
 
     # No need to fabricate claims from a weak model identity.
-    md = render_markdown(category, manufacturer, model, specs)
-    print("\n===== MARKDOWN-ENTWURF (nicht gespeichert) =====\n")
-    print(md)
-    print("===== PRÜFBERICHT =====")
-    if issues:
-        print("STATUS: REVIEW")
-        for item in issues:
-            print(" -", item)
-    else:
-        print("STATUS: STRUKTUR- UND BASISBELEGPRÜFUNG OK")
-        print("Keine automatische Freigabe: Fachprüfung und Dublettenprüfung stehen aus.")
-        # Noch offene Meldungen in den strukturierten Bericht übernehmen.
-    add_legacy_issues(
-        review,
-        issues,
-        source_findings,
+    md = render_markdown(category, manufacturer, model_name, specs)
+
+    return (
+        specs, issues, evidence, validation_issues,
+        source_findings, review, md, er,
     )
 
-    review.print_report()
+def process_document(
+    source_bytes: bytes,
+    filename: str,
+    model: str,
+    ollama_url: str,
+) -> dict:
+    """Verarbeitet ein Dokument ohne automatische Speicherung."""
 
-    final_review = evaluate_final_fields(specs, evidence)
+    source = extract_document_text(source_bytes, filename)
 
-    print("\n===== FINALE FELDKONSISTENZ =====")
-    print(f"STATUS: {final_review.status}")
+    classification, cr, classification_findings = classify_document(
+        source=source,
+        model=model,
+        ollama_url=ollama_url,
+    )
+
+    if classification_findings:
+        return {
+            "schema_version": "1.0",
+            "source": {
+                "filename": filename,
+                "sha256": hashlib.sha256(source_bytes).hexdigest(),
+            },
+            "model": model,
+            "classification": classification,
+            "review": {
+                "status": "REVIEW",
+                "findings": classification_findings,
+            },
+            "evidence": {},
+            "markdown": None,
+            "coverage": {},
+            "metrics": {
+                "classification": {
+                    "total_duration": cr.get("total_duration", 0),
+                    "prompt_eval_count": cr.get("prompt_eval_count"),
+                    "eval_count": cr.get("eval_count"),
+                },
+                "extraction": None,
+            },
+        }
+    category = classification["category"]
+    manufacturer = classification["manufacturer"]
+    model_name = classification["model"]
+
+    diagnostic_output = StringIO()
+
+    with redirect_stdout(diagnostic_output):
+        (
+            specs,
+            issues,
+            evidence,
+            validation_issues,
+            source_findings,
+            review,
+            md,
+            er,
+        ) = extract_gpu_document(
+            source=source,
+            category=category,
+            manufacturer=manufacturer,
+            model_name=model_name,
+            model=model,
+            ollama_url=ollama_url,
+        )
 
     central_review = evaluate_final_review(
         validation_issues=validation_issues,
@@ -657,78 +683,109 @@ def main() -> int:
         evidence=evidence,
         source=source,
     )
-    import_result = build_import_result(
-        source_path=args.file,
+
+    coverage = classify_gpu_field_coverage(specs)
+
+    metrics = {
+        "classification": {
+            "total_duration": cr.get("total_duration", 0),
+            "prompt_eval_count": cr.get("prompt_eval_count"),
+            "eval_count": cr.get("eval_count"),
+        },
+        "extraction": {
+            "total_duration": er.get("total_duration", 0),
+            "prompt_eval_count": er.get("prompt_eval_count"),
+            "eval_count": er.get("eval_count"),
+        },
+    }
+
+    return build_import_result(
+        source_path=Path(filename),
         source_bytes=source_bytes,
-        model=args.model,
+        model=model,
         classification=classification,
         markdown=md,
         review=central_review,
         evidence=evidence,
     )
-    if import_result["review"]["status"] != central_review.status:
-        raise RuntimeError(
-            "Import-Ergebnis und zentraler Review-Status "
-            "weichen voneinander ab"
-        )
-    legacy_technical, legacy_llm = separate_legacy_issues(issues)
 
-    #print("\n===== STRUKTURIERTE VALIDIERUNGSFEHLER =====")
+def print_import_report(result: dict) -> None:
+    """Gibt ein strukturiertes Importergebnis auf der Konsole aus."""
 
-    #for issue in validation_issues:
-    #    print(
-    #        f"{issue.code} "
-    #        f"({issue.field}): "
-    #        f"resolved={issue.resolved}"
-    #    )
-
-    #print("\n===== LEGACY-ABGLEICH (DIAGNOSE) =====")
-    #print(f"Technische Legacy-Meldungen: {len(legacy_technical)}")
-    #print(f"LLM-Diagnosen: {len(legacy_llm)}")
-
-    for message in legacy_technical:
-        print(f"LEGACY_TECHNICAL: {message}")
-
-    print(f"Zentraler Status: {central_review.status}")
-
-    print("\n===== ZENTRALER REVIEW-BERICHT =====")
-    print(f"STATUS: {central_review.status}")
-
-    for finding in central_review.findings:
-        print(
-            f"[{finding.severity.upper()}] "
-            f"{finding.code} ({finding.field}): "
-            f"{finding.message}"
-        )
-
-    coverage = classify_gpu_field_coverage(specs)
-
-    print("\n===== SEMANTISCHE PRÜFABDECKUNG =====")
-
-    for field, status in sorted(coverage.items()):
-        print(f"{field}: {status}")
-
-    unverified_fields = [
-        field
-        for field, status in coverage.items()
-        if status == "UNVERIFIED"
-    ]
+    classification = result["classification"]
+    review = result["review"]
 
     print(
-        f"Nicht abgedeckte, belegte Felder: "
-        f"{len(unverified_fields)}"
+        "\nKLASSIFIKATION:",
+        json.dumps(classification, ensure_ascii=False),
     )
 
-    print("Belege:")
-    print(json.dumps(evidence, ensure_ascii=False, indent=2))
-    print("Metriken:")
-    for label, raw in (("Klassifikation", cr), ("Extraktion", er)):
-        print(f" {label}: {raw.get('total_duration', 0)/1e9:.2f}s; "
-              f"Prompt {raw.get('prompt_eval_count', '?')}; "
-              f"Output {raw.get('eval_count', '?')}")
-    # Technischer Status ausschließlich aus dem zentralen Review-Bericht.
-    # Menschliche Freigabe und Dublettenprüfung bleiben erforderlich.
-    return 2 if central_review.requires_review else 0
+    if result["markdown"] is not None:
+        print("\n===== MARKDOWN-ENTWURF (nicht gespeichert) =====\n")
+        print(result["markdown"])
+        print("===== PRÜFBERICHT =====")
+        print("STATUS:", review["status"])
+
+    print("\n===== ZENTRALER REVIEW-BERICHT =====")
+    print("STATUS:", review["status"])
+
+    for finding in review["findings"]:
+        print(
+            f"[{finding['severity'].upper()}] "
+            f"{finding['code']} ({finding.get('field')}): "
+            f"{finding['message']}"
+        )
+
+    if result.get("coverage"):
+        print("\n===== SEMANTISCHE PRÜFABDECKUNG =====")
+
+        for field, status in sorted(result["coverage"].items()):
+            print(f"{field}: {status}")
+
+    if result.get("evidence"):
+        print("Belege:")
+        print(
+            json.dumps(
+                result["evidence"],
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+
+def main() -> int:
+    """CLI-Einstiegspunkt für den lokalen LLM-Import (DRY-RUN)."""
+
+    parser = argparse.ArgumentParser(
+        description="Retro-RAG LLM Import – DRY-RUN"
+    )
+    parser.add_argument("file", type=Path)
+    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--ollama-url", default=DEFAULT_URL)
+    args = parser.parse_args()
+
+    print(
+        f"Quelle: {args.file}\n"
+        f"Modell: {args.model}\n"
+        "Modus: DRY-RUN"
+    )
+
+    if not args.file.is_file():
+        raise ValueError(f"Datei nicht gefunden: {args.file}")
+
+    with args.file.open("rb") as handle:
+        source_bytes = handle.read(MAX_BYTES + 1)
+
+    result = process_document(
+        source_bytes=source_bytes,
+        filename=args.file.name,
+        model=args.model,
+        ollama_url=args.ollama_url,
+    )
+
+    print_import_report(result)
+
+    return 2 if result["review"]["status"] == "REVIEW" else 0
+
 
 
 if __name__ == "__main__":

@@ -119,7 +119,8 @@ class TestProcessDocument(unittest.TestCase):
         }
 
         def fake_extract(**kwargs):
-            print("INTERNE GPU-DIAGNOSE")
+            # Diagnose über die neue Schnittstelle sammeln.
+            kwargs["diagnostics"].append("INTERNE GPU-DIAGNOSE")
 
             return (
                 {"gpu_chip": "GeForce 210"},
@@ -159,8 +160,19 @@ class TestProcessDocument(unittest.TestCase):
                 ollama_url="http://127.0.0.1:11434/api/chat",
             )
 
+        # Keine Konsolenausgabe aus process_document().
         self.assertEqual(output.getvalue(), "")
-        self.assertEqual(result["review"]["status"], "VALIDATED")
+
+        # Diagnosemeldung muss im Ergebnisobjekt vorhanden sein.
+        self.assertEqual(
+            result["diagnostics"],
+            ["INTERNE GPU-DIAGNOSE"],
+        )
+
+        self.assertEqual(
+            result["review"]["status"],
+            "VALIDATED",
+        )
 
     def test_print_import_report(self):
         import contextlib

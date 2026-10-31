@@ -46,8 +46,8 @@ from llm_import.normalizers import (
 )
 from import_pg import CATEGORIES, parse_md
 from llm_import.classification import validate_classification
-from contextlib import redirect_stdout
-from io import StringIO
+#from contextlib import redirect_stdout
+#from io import StringIO
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MODEL = "qwen3.5:4b"
@@ -405,14 +405,23 @@ def classify_document(
 
     return classification, metrics, findings
 
+def emit_diagnostic(diagnostics: list[str], message: str) -> None:
+    """Sammelt Diagnosemeldungen ohne Konsolenausgabe."""
+    diagnostics.append(message)
+
 def extract_gpu_document(
+
     source: str,
     category: str,
     manufacturer: str,
     model_name: str,
     model: str,
     ollama_url: str,
+    diagnostics: list[str] | None = None,
 ):
+
+    if diagnostics is None:
+        diagnostics = []
     """GPU-Extraktion und Validierung (Übergangsfunktion)."""
     # Fachliche Verarbeitung aus dem bisherigen main().
     schema = load_schema(category)
@@ -447,7 +456,10 @@ def extract_gpu_document(
     }
 
     if source_findings:
-        print("\n===== QUELLEN-SICHERHEITSPRÜFUNG =====")
+        emit_diagnostic(
+            diagnostics,
+            "\n===== QUELLEN-SICHERHEITSPRÜFUNG =====",
+        )
 
         for finding in source_findings:
             code = finding["code"]
@@ -469,7 +481,10 @@ def extract_gpu_document(
                 f"{code}: {field} – {finding}"
             )
 
-            print(f"REVIEW: {code} ({field})")
+            emit_diagnostic(
+                diagnostics,
+                f"REVIEW: {code} ({field})",
+         )
     # Ab hier neu erzeugte Normalisierungsfehler getrennt erfassen.
     normalization_issue_start = len(issues)
     deterministic = extract_deterministic_gpu_fields(source)
@@ -490,23 +505,28 @@ def extract_gpu_document(
                 "candidates": finding["values"],
             }
 
-    print("\n===== REGELBASIERTE GEGENPRÜFUNG =====")
+    emit_diagnostic(
+    diagnostics,
+    "===== REGELBASIERTE GEGENPRÜFUNG =====",
+    )
 
     for field, result in deterministic.items():
 
         if field in conflicting_fields:
-            print(
+            emit_diagnostic(
+                diagnostics,
                 f"{field}: REVIEW – widersprüchliche "
-                "Quellenwerte, automatische Ergänzung gesperrt"
+                "Quellenwerte, automatische Ergänzung gesperrt",
             )
             continue
 
         candidate = result["value"]
         current = specs.get(field)
 
-        print(
+        emit_diagnostic(
+            diagnostics,
             f"{field}: {candidate} "
-            f"[Quelle: {result['evidence']}]"
+            f"[Quelle: {result['evidence']}]",
         )
 
         if current is None:
@@ -519,7 +539,10 @@ def extract_gpu_document(
                 "origin": "deterministic"
             }
 
-            print("  -> Fehlender Wert ergänzt")
+            emit_diagnostic(
+                diagnostics,
+                "  -> Fehlender Wert ergänzt",
+            )
 
         elif current != candidate:
             # Gleiche Abmessungen mit/ohne Einheit akzeptieren.
@@ -546,7 +569,10 @@ def extract_gpu_document(
                     "origin": "deterministic"
                 }
 
-                print("  -> Darstellung normalisiert")
+                emit_diagnostic(
+                    diagnostics,
+                    "  -> Darstellung normalisiert",
+                )
 
             else:
                 reconcile_deterministic_value(
@@ -559,13 +585,16 @@ def extract_gpu_document(
                     issues=issues,
                 )
 
-                print(
-                    "  -> REVIEW: Widerspruch, "
-                    "Feld gesperrt"
+                emit_diagnostic(
+                    diagnostics,
+                    "  -> REVIEW: Widerspruch, Feld gesperrt",
                 )
 
         else:
-            print("  -> Übereinstimmung")
+            emit_diagnostic(
+                diagnostics,
+                "  -> Übereinstimmung",
+            )
 
     normalize_gpu_identity_and_apis(
         source, specs, evidence, issues
@@ -655,26 +684,26 @@ def process_document(
     manufacturer = classification["manufacturer"]
     model_name = classification["model"]
 
-    diagnostic_output = StringIO()
+    diagnostics = []
 
-    with redirect_stdout(diagnostic_output):
-        (
-            specs,
-            issues,
-            evidence,
-            validation_issues,
-            source_findings,
-            review,
-            md,
-            er,
-        ) = extract_gpu_document(
-            source=source,
-            category=category,
-            manufacturer=manufacturer,
-            model_name=model_name,
-            model=model,
-            ollama_url=ollama_url,
-        )
+    (
+        specs,
+        issues,
+        evidence,
+        validation_issues,
+        source_findings,
+        review,
+        md,
+        er,
+    ) = extract_gpu_document(
+        source=source,
+        category=category,
+        manufacturer=manufacturer,
+        model_name=model_name,
+        model=model,
+        ollama_url=ollama_url,
+        diagnostics=diagnostics,
+    )
 
     central_review = evaluate_final_review(
         validation_issues=validation_issues,
@@ -699,7 +728,7 @@ def process_document(
         },
     }
 
-    return build_import_result(
+    result = build_import_result(
         source_path=Path(filename),
         source_bytes=source_bytes,
         model=model,
@@ -708,6 +737,12 @@ def process_document(
         review=central_review,
         evidence=evidence,
     )
+
+    result["coverage"] = coverage
+    result["metrics"] = metrics
+    result["diagnostics"] = diagnostics
+
+    return result
 
 def print_import_report(result: dict) -> None:
     """Gibt ein strukturiertes Importergebnis auf der Konsole aus."""

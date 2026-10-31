@@ -44,6 +44,7 @@ from llm_import.normalizers import (
     reconcile_deterministic_value,
 )
 from import_pg import CATEGORIES, parse_md
+from llm_import.classification import validate_classification
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MODEL = "qwen3.5:4b"
@@ -344,6 +345,63 @@ def render_markdown(category: str, manufacturer: str, model: str, specs: dict) -
         raise ValueError("Markdown-Frontmatter weicht vom validierten Objekt ab")
     return md
 
+CLASSIFICATION_SYSTEM_PROMPT = (
+    "Du klassifizierst technische Hardware-Datenblätter. "
+    "Bestimme die Hardwarekategorie anhand der beschriebenen "
+    "Funktion und der technischen Eigenschaften. "
+
+    "Verwende exakt die Kategorien des JSON-Schemas. "
+
+    "Beispiele zur Orientierung: "
+    "GPU, Graphics Processing Unit, Video Card oder "
+    "Graphics Card -> grafikkarte. "
+    "Processor oder Central Processing Unit -> cpu. "
+    "Motherboard oder Mainboard -> mainboard. "
+    "Network Adapter oder Ethernet Card -> netzwerkkarte. "
+
+    "Hersteller und Modell müssen im Dokument belegbar sein. "
+    "Unterscheide den Hersteller einer Grafikkarte vom "
+    "Hersteller des darauf verbauten Grafikchips. "
+
+    "Nutze unknown nur, wenn sich die Hardwarekategorie "
+    "aus dem Dokument nicht zuverlässig bestimmen lässt. "
+    "Erfinde keine Modellnummern oder Hersteller. "
+    "Antworte ausschließlich im vorgegebenen JSON-Schema."
+
+    "Bei Memory Speed übernimm den angegebenen MHz-Wert "
+    "ohne Interpretation als effektiven DDR-Takt. "
+    "Grafikchip-Hersteller und Grafikchip-Bezeichnung "
+    "sind getrennte Felder. "
+    "Beispiel: NVIDIA GeForce 210 bedeutet "
+    "gpu_manufacturer NVIDIA und gpu_chip GeForce 210. "
+    "Bei api_support verwende Bezeichnungen wie "
+    "DirectX 10.1 und OpenGL 3.1, sofern belegt. "
+    "Übernimm dokumentierte Abmessungen einschließlich "
+    "ihrer Einheit. "
+)
+
+def classify_document(
+    source: str,
+    model: str,
+    ollama_url: str,
+) -> tuple[dict, dict, list[dict]]:
+    """Klassifiziert Hardware und prüft die Quellenidentität."""
+
+    classification, metrics = call_ollama(
+        ollama_url,
+        model,
+        CLASSIFICATION_SYSTEM_PROMPT,
+        source,
+        CLASSIFY_SCHEMA,
+    )
+
+    findings = validate_classification(
+        classification,
+        source,
+    )
+
+    return classification, metrics, findings
+
 def main() -> int:
     p = argparse.ArgumentParser(description="Retro-RAG LLM Import v0.2 – nur Dry-Run")
     p.add_argument("file", type=Path)
@@ -352,57 +410,32 @@ def main() -> int:
     args = p.parse_args()
     print(f"Quelle: {args.file}\nModell: {args.model}\nModus: DRY-RUN")
     source_bytes, source = read_document_bytes(args.file)
-    classification, cr = call_ollama(
-    args.ollama_url, args.model,
-    (
-        "Du klassifizierst technische Hardware-Datenblätter. "
-        "Bestimme die Hardwarekategorie anhand der beschriebenen "
-        "Funktion und der technischen Eigenschaften. "
 
-        "Verwende exakt die Kategorien des JSON-Schemas. "
-
-        "Beispiele zur Orientierung: "
-        "GPU, Graphics Processing Unit, Video Card oder "
-        "Graphics Card -> grafikkarte. "
-        "Processor oder Central Processing Unit -> cpu. "
-        "Motherboard oder Mainboard -> mainboard. "
-        "Network Adapter oder Ethernet Card -> netzwerkkarte. "
-
-        "Hersteller und Modell müssen im Dokument belegbar sein. "
-        "Unterscheide den Hersteller einer Grafikkarte vom "
-        "Hersteller des darauf verbauten Grafikchips. "
-
-        "Nutze unknown nur, wenn sich die Hardwarekategorie "
-        "aus dem Dokument nicht zuverlässig bestimmen lässt. "
-        "Erfinde keine Modellnummern oder Hersteller. "
-        "Antworte ausschließlich im vorgegebenen JSON-Schema."
-
-        "Bei Memory Speed übernimm den angegebenen MHz-Wert "
-        "ohne Interpretation als effektiven DDR-Takt. "
-        "Grafikchip-Hersteller und Grafikchip-Bezeichnung "
-        "sind getrennte Felder. "
-        "Beispiel: NVIDIA GeForce 210 bedeutet "
-        "gpu_manufacturer NVIDIA und gpu_chip GeForce 210. "
-        "Bei api_support verwende Bezeichnungen wie "
-        "DirectX 10.1 und OpenGL 3.1, sofern belegt. "
-        "Übernimm dokumentierte Abmessungen einschließlich "
-        "ihrer Einheit. "
-    ),
-    source,
-    CLASSIFY_SCHEMA,
-)
+    classification, cr, classification_findings = classify_document(
+        source=source,
+        model=args.model,
+        ollama_url=args.ollama_url,
+    )
     category = classification.get("category")
     manufacturer = classification.get("manufacturer", "")
     model = classification.get("model", "")
     print("\nKLASSIFIKATION:", json.dumps(classification, ensure_ascii=False))
-    if category != "grafikkarte":
-        print("STATUS: REVIEW – v0.2 unterstützt derzeit nur grafikkarte")
-        return 2
-    if not all(isinstance(s, str) and s.strip() for s in (manufacturer, model)):
-        print("STATUS: REVIEW – Hersteller/Modell fehlt")
-        return 2
-    if manufacturer.casefold() not in source.casefold() or model.casefold() not in source.casefold():
-        print("STATUS: REVIEW – Hersteller/Modell nicht wörtlich im Dokument")
+    classification_findings = validate_classification(
+        classification,
+        source,
+    )
+
+    if classification_findings:
+        print("\n===== KLASSIFIKATIONS-REVIEW =====")
+        print("STATUS: REVIEW")
+
+        for finding in classification_findings:
+            print(
+                f"[{finding['severity'].upper()}] "
+                f"{finding['code']} ({finding['field']}): "
+                f"{finding['message']}"
+            )
+
         return 2
     schema = load_schema(category)
     extraction, er = call_ollama(

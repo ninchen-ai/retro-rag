@@ -371,6 +371,12 @@ def verify_minimum_os_requirements(
 
         version = re.sub(r"\s+", "", normalized_value)
 
+        # Kombinierte Windows-98-Angabe aus dem Originalhandbuch.
+        if version == "98/98se":
+            if not {"98", "98se"}.issubset(source_versions):
+                return False
+            continue
+
         if version not in valid_versions:
             return False
 

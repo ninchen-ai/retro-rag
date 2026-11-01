@@ -127,6 +127,20 @@ class TestMinimumOSRequirements(unittest.TestCase):
             )
         )
 
+    def test_combined_windows_98_and_98se(self):
+        evidence = (
+            "Operating Systems Win® 98/98SE / "
+            "Win® 2000 / Win® ME / Win® XP"
+        )
+
+        self.assertTrue(
+            verify_minimum_os_requirements(
+                ["Win 98/98SE", "Win 2000", "Win ME", "Win XP"],
+                [evidence],
+                SOURCE,
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -52,6 +52,7 @@ from llm_import.variant_evidence import inspect_variant_memory
 from llm_import.model_context import find_shared_board_layout
 from llm_import.video_evidence import suggest_video_evidence, diagnose_model_video_outputs, video_suggestion_status
 from llm_import.validation import verify_video_outputs_evidence
+from llm_import.review_report import render_review_report
 
 #from contextlib import redirect_stdout
 #from io import StringIO
@@ -921,7 +922,12 @@ def process_multi_model_document(
             result["coverage"] = classify_gpu_field_coverage(specs)
             result["metrics"] = {
                 "extraction": extraction_metrics,
+
             }
+
+            # Menschenlesbaren Bericht aus dem fertigen
+            # Importergebnis erzeugen, ohne Schreibzugriff.
+            result["review_markdown"] = render_review_report(result)
 
         except Exception as exc:
             # Auch eine fehlgeschlagene Variante bleibt sichtbar.

@@ -131,5 +131,32 @@ class TestMultiModel(unittest.TestCase):
             )
         )
 
+        first = result["results"][0]
+        second = result["results"][1]
+
+        self.assertIn("review_markdown", first)
+        self.assertIn("review_markdown", second)
+
+        self.assertIn(
+            "GV-R92S128T",
+            first["review_markdown"],
+        )
+        self.assertIn(
+            "GV-R92S64T",
+            second["review_markdown"],
+        )
+
+        self.assertIn(
+            "MULTI_MODEL_VALIDATION_PENDING",
+            first["review_markdown"],
+        )
+        self.assertIn(
+            "MULTI_MODEL_VALIDATION_PENDING",
+            second["review_markdown"],
+        )
+
+        self.assertEqual(first["review"]["status"], "REVIEW")
+        self.assertEqual(second["review"]["status"], "REVIEW")
+
 if __name__ == "__main__":
     unittest.main()

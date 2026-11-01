@@ -118,6 +118,15 @@ for item in result["results"]:
         "video_outputs"
     )
 
+    print("\n===== MARKDOWN-REVIEW-BERICHT =====")
+
+    review_markdown = item.get("review_markdown")
+
+    if review_markdown:
+        print(review_markdown)
+    else:
+        print("Kein Review-Bericht erzeugt.")
+
     print("\n================================")
     print("Modell:", classification.get("model"))
     print("Status:", review.get("status"))

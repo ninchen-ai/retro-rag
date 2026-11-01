@@ -184,6 +184,92 @@ def verify_manual_gpu_evidence(
 
     return False
 
+def verify_video_outputs_evidence(
+    values: list,
+    evidence: list,
+    source: str,
+) -> bool:
+    """Prüft Videoausgänge einzeln und verhindert doppelte Aliase."""
+
+    if not isinstance(values, list) or not values:
+        return False
+
+    if not isinstance(evidence, list):
+        return False
+
+    if len(values) != len(evidence):
+        return False
+
+    patterns = {
+        "vga": r"\b(?:VGA|D-Sub)\b",
+        "s-video": r"\bS[\s-]*Video\b",
+        "hdmi": r"\bHDMI\b",
+        "displayport": r"\bDisplayPort\b",
+        "dvi": r"\bDVI(?:-[ADI])?\b",
+    }
+
+    aliases = {
+        "d-sub": "vga",
+        "vga": "vga",
+        "s-video": "s-video",
+        "s video": "s-video",
+        "hdmi": "hdmi",
+        "displayport": "displayport",
+        "dvi": "dvi",
+        "dvi-d": "dvi",
+        "dvi-i": "dvi",
+        "dvi-a": "dvi",
+    }
+
+    normalized_source = normalize_evidence(source)
+    seen = set()
+
+    for value, snippet in zip(values, evidence):
+
+        if not isinstance(value, str):
+            return False
+
+        if not isinstance(snippet, str) or not snippet.strip():
+            return False
+
+        key = aliases.get(value.strip().casefold())
+
+        if key is None or key in seen:
+            return False
+
+        seen.add(key)
+
+        if normalize_evidence(snippet) not in normalized_source:
+            return False
+
+        # Die Anschlussbezeichnung muss im Beleg vorkommen.
+        if not re.search(
+            patterns[key],
+            snippet,
+            flags=re.IGNORECASE,
+        ):
+            return False
+
+        # Negierte Anschlussangaben nicht als Nachweis
+        # eines vorhandenen Anschlusses akzeptieren.
+        negative_patterns = (
+            r"\bnot\s+(?:supported|available|present|included)\b",
+            r"\b(?:unsupported|unavailable)\b",
+            r"\b(?:no|without)\s+"
+            r"(?:VGA|D-Sub|S[\s-]*Video|HDMI|DisplayPort|DVI)\b",
+            r"\b(?:nicht\s+(?:unterstützt|verfügbar|vorhanden)"
+            r"|kein(?:e|en)?\s+"
+            r"(?:VGA|D-Sub|S[\s-]*Video|HDMI|DisplayPort|DVI))\b",
+        )
+
+        if any(
+            re.search(pattern, snippet, flags=re.IGNORECASE)
+            for pattern in negative_patterns
+        ):
+            return False
+
+    return True
+
 def verify_gpu_field_evidence(
     field: str,
     value,
@@ -354,6 +440,7 @@ GPU_SEMANTICALLY_VERIFIED_FIELDS = frozenset({
     "interface",
     "dimensions_mm",
     "api_support",
+    "video_outputs"
 })
 
 

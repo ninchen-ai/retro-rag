@@ -7,7 +7,11 @@ from llm_import.nextcloud_review import (
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 
-from llm_import.nextcloud_review import execute_review_put
+from llm_import.nextcloud_review import (
+    build_review_put_request,
+    NoRedirectHandler,
+    upload_review_file,
+)
 
 
 class TestNextcloudReview(unittest.TestCase):
@@ -79,8 +83,7 @@ class TestNextcloudReview(unittest.TestCase):
         opener = mock_build_opener.return_value
         opener.open.return_value.__enter__.return_value = response
 
-        request = build_review_put_request(**self.args)
-        result = execute_review_put(request)
+        result = upload_review_file(**self.args)
 
         self.assertEqual(result["status"], "CREATED")
         self.assertEqual(result["http_status"], 201)
@@ -93,8 +96,7 @@ class TestNextcloudReview(unittest.TestCase):
         opener = mock_build_opener.return_value
         opener.open.return_value.__enter__.return_value = response
 
-        request = build_review_put_request(**self.args)
-        result = execute_review_put(request)
+        result = upload_review_file(**self.args)
 
         self.assertEqual(result["status"], "CREATED")
         self.assertEqual(result["http_status"], 201)
@@ -113,8 +115,7 @@ class TestNextcloudReview(unittest.TestCase):
             fp=None,
         )
 
-        request = build_review_put_request(**self.args)
-        result = execute_review_put(request)
+        result = upload_review_file(**self.args)
 
         self.assertEqual(result["status"], "CONFLICT")
         self.assertEqual(result["http_status"], 412)
@@ -133,13 +134,10 @@ class TestNextcloudReview(unittest.TestCase):
             fp=None,
         )
 
-        request = build_review_put_request(**self.args)
-
         with self.assertRaises(RuntimeError) as context:
-            execute_review_put(request)
+            upload_review_file(**self.args)
 
         self.assertIn("HTTP 401", str(context.exception))
-
         opener.open.assert_called_once()
 
     @patch("llm_import.nextcloud_review.build_opener")
@@ -154,13 +152,39 @@ class TestNextcloudReview(unittest.TestCase):
             fp=None,
         )
 
-        request = build_review_put_request(**self.args)
-
         with self.assertRaises(RuntimeError) as context:
-            execute_review_put(request)
+            upload_review_file(**self.args)
 
         self.assertIn("HTTP 302", str(context.exception))
         opener.open.assert_called_once()
+
+    def test_redirect_handler_blocks_external_redirect(self):
+        handler = NoRedirectHandler()
+
+        request = build_review_put_request(**self.args)
+
+        redirected = handler.redirect_request(
+            req=request,
+            fp=None,
+            code=302,
+            msg="Found",
+            headers={"Location": "https://example.org/"},
+            newurl="https://example.org/",
+        )
+
+        self.assertIsNone(redirected)
+
+    @patch("llm_import.nextcloud_review.build_opener")
+    def test_upload_rejects_unsafe_path_without_network(
+        self, mock_build_opener
+    ):
+        args = self.args.copy()
+        args["path"] = "Retro-Computing/Hardware/test.md"
+
+        with self.assertRaises(ValueError):
+            upload_review_file(**args)
+
+        mock_build_opener.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()

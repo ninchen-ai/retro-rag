@@ -110,7 +110,7 @@ class NoRedirectHandler(HTTPRedirectHandler):
     ):
         return None
 
-def execute_review_put(request: Request) -> dict:
+def _execute_review_put(request: Request) -> dict:
     """Führt eine vorbereitete PUT-Anfrage aus.
 
     Nur für den späteren expliziten Upload vorgesehen.
@@ -151,3 +151,23 @@ def execute_review_put(request: Request) -> dict:
         raise RuntimeError(
             "WebDAV-Verbindung fehlgeschlagen"
         ) from exc
+
+def upload_review_file(
+    *,
+    base_url: str,
+    user: str,
+    password: str,
+    path: str,
+    content: str,
+) -> dict:
+    """Lädt ausschließlich eine validierte Review-Datei hoch."""
+
+    request = build_review_put_request(
+        base_url=base_url,
+        user=user,
+        password=password,
+        path=path,
+        content=content,
+    )
+
+    return _execute_review_put(request)

@@ -14,6 +14,7 @@ def build_import_result(
     markdown: str,
     review,
     evidence: dict,
+    evidence_suggestions: dict | None = None,
 ) -> dict:
     """Erstellt ein JSON-kompatibles Importergebnis ohne Schreibzugriff."""
 
@@ -33,5 +34,10 @@ def build_import_result(
             ],
         },
         "evidence": evidence,
+        "evidence_suggestions": (
+            evidence_suggestions
+            if evidence_suggestions is not None
+            else {}
+        ),
         "markdown": markdown,
     }

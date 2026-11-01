@@ -1,6 +1,7 @@
 import getpass
 import os
 import re
+import json
 
 from llm_import.model_context import find_shared_board_layout
 from llm_import.video_evidence import suggest_video_evidence
@@ -134,6 +135,18 @@ for item in result["results"]:
             "|",
             finding.get("field"),
         )
+
+    print("\n===== STRUKTURIERTE BELEGVORSCHLÄGE =====")
+
+    suggestions = item.get("evidence_suggestions", {})
+
+    print(
+        json.dumps(
+            suggestions,
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
     os_errors = [
         finding

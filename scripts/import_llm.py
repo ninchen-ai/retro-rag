@@ -50,7 +50,7 @@ from llm_import.target_model import build_target_model_instruction
 from llm_import.model_candidates import detect_model_candidates
 from llm_import.variant_evidence import inspect_variant_memory
 from llm_import.model_context import find_shared_board_layout
-from llm_import.video_evidence import suggest_video_evidence, diagnose_model_video_outputs
+from llm_import.video_evidence import suggest_video_evidence, diagnose_model_video_outputs, video_suggestion_status
 from llm_import.validation import verify_video_outputs_evidence
 
 #from contextlib import redirect_stdout
@@ -854,6 +854,29 @@ def process_multi_model_document(
                 source=source,
             )
 
+            # Alternative Quellenbelege ermitteln.
+            # Keine Änderung an specs oder evidence.
+            video_suggestions = diagnose_model_video_outputs(
+                source=source,
+                target_model=target,
+                values=specs.get("video_outputs"),
+            )
+
+            # Status erst nach der Diagnose bestimmen.
+            suggestion_status = video_suggestion_status(
+                video_suggestions
+            )
+
+            evidence_suggestions = {
+                "video_outputs": {
+                    "model_context": video_suggestions["context_status"],
+                    "model_evidence": video_suggestions["model_evidence"],
+                    "suggestions": video_suggestions["suggestions"],
+                    "validation_passed": video_suggestions["valid"],
+                    "status": suggestion_status,
+                }
+            }
+
             result = build_import_result(
                 source_path=Path(filename),
                 source_bytes=source_bytes,
@@ -866,6 +889,7 @@ def process_multi_model_document(
                 markdown=markdown,
                 review=central_review,
                 evidence=evidence,
+                evidence_suggestions=evidence_suggestions,
             )
 
             # Mehrmodell-Entwürfe sind noch nicht

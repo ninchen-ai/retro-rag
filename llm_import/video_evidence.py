@@ -86,6 +86,7 @@ def diagnose_model_video_outputs(
     result = {
         "model": target_model,
         "context_status": context["status"],
+        "model_evidence": context["model_evidence"],
         "suggestions": {},
         "valid": False,
     }
@@ -114,3 +115,15 @@ def diagnose_model_video_outputs(
     )
 
     return result
+
+def video_suggestion_status(diagnostic: dict) -> str:
+    """Bewertet ausschließlich alternative Quellenbelegvorschläge."""
+
+    if (
+        diagnostic.get("context_status") == "SHARED"
+        and diagnostic.get("valid") is True
+        and bool(diagnostic.get("suggestions"))
+    ):
+        return "EVIDENCE_SUGGESTED"
+
+    return "UNCERTAIN"

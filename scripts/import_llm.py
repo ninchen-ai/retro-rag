@@ -47,6 +47,8 @@ from llm_import.normalizers import (
 from import_pg import CATEGORIES, parse_md
 from llm_import.classification import validate_classification
 from llm_import.target_model import build_target_model_instruction
+from llm_import.model_candidates import detect_model_candidates
+from llm_import.variant_evidence import inspect_variant_memory
 
 #from contextlib import redirect_stdout
 #from io import StringIO
@@ -503,7 +505,13 @@ def extract_gpu_document(
          )
     # Ab hier neu erzeugte Normalisierungsfehler getrennt erfassen.
     normalization_issue_start = len(issues)
-    deterministic = extract_deterministic_gpu_fields(source)
+    # Bei einer zielmodellbezogenen Extraktion dürfen dokumentweite
+    # Regeln keine Werte anderer Varianten ergänzen.
+    deterministic = (
+        extract_deterministic_gpu_fields(source)
+        if target_model is None
+        else {}
+    )
 
     # Widersprüchliche Felder dürfen keinen Einzelwert behalten.
     for finding in source_findings:
@@ -759,6 +767,143 @@ def process_document(
     result["diagnostics"] = diagnostics
 
     return result
+
+def process_multi_model_document(
+    source_bytes: bytes,
+    filename: str,
+    model: str,
+    ollama_url: str,
+    manufacturer: str = "Gigabyte",
+) -> dict:
+    """Erzeugt getrennte Review-Entwürfe für mehrere GPU-Modelle.
+
+    Keine Speicherung in Nextcloud oder PostgreSQL.
+    """
+
+    source = extract_document_text(source_bytes, filename)
+    candidates = detect_model_candidates(source)
+
+    if len(candidates) < 2:
+        raise ValueError(
+            "Für den Mehrmodell-Import wurden weniger "
+            "als zwei Modellkandidaten erkannt."
+        )
+
+    variants = inspect_variant_memory(source, candidates)
+    results = []
+
+    for target in candidates:
+        diagnostics = []
+
+        try:
+            (
+                specs,
+                issues,
+                evidence,
+                validation_issues,
+                source_findings,
+                review,
+                markdown,
+                extraction_metrics,
+            ) = extract_gpu_document(
+                source=source,
+                category="grafikkarte",
+                manufacturer=manufacturer,
+                model_name=target,
+                model=model,
+                ollama_url=ollama_url,
+                diagnostics=diagnostics,
+                target_model=target,
+            )
+
+            central_review = evaluate_final_review(
+                validation_issues=validation_issues,
+                source_findings=source_findings,
+                specs=specs,
+                evidence=evidence,
+                source=source,
+            )
+
+            result = build_import_result(
+                source_path=Path(filename),
+                source_bytes=source_bytes,
+                model=model,
+                classification={
+                    "category": "grafikkarte",
+                    "manufacturer": manufacturer,
+                    "model": target,
+                },
+                markdown=markdown,
+                review=central_review,
+                evidence=evidence,
+            )
+
+            # Mehrmodell-Entwürfe sind noch nicht
+            # vollständig variantenspezifisch validiert.
+            result["review"]["status"] = "REVIEW"
+            result["review"].setdefault("findings", []).append({
+                "code": "MULTI_MODEL_VALIDATION_PENDING",
+                "severity": "warning",
+                "field": "document",
+                "message": (
+                    "Modellbezogene Prüfung aller technischen "
+                    "Eigenschaften noch nicht abgeschlossen."
+                ),
+            })
+
+            if variants[target]["status"] == "CONFLICT":
+                result["review"]["findings"].append({
+                    "code": "VARIANT_MEMORY_CONFLICT",
+                    "severity": "error",
+                    "field": "memory",
+                    "message": (
+                        "Widersprüchliche Speicherkapazitäten "
+                        "für das Zielmodell."
+                    ),
+                })
+
+            result["variant_memory"] = variants[target]
+            result["diagnostics"] = diagnostics
+            result["coverage"] = classify_gpu_field_coverage(specs)
+            result["metrics"] = {
+                "extraction": extraction_metrics,
+            }
+
+        except Exception as exc:
+            # Auch eine fehlgeschlagene Variante bleibt sichtbar.
+            result = {
+                "classification": {
+                    "category": "grafikkarte",
+                    "manufacturer": manufacturer,
+                    "model": target,
+                },
+                "markdown": None,
+                "review": {
+                    "status": "REVIEW",
+                    "findings": [{
+                        "code": "MODEL_EXTRACTION_FAILED",
+                        "severity": "error",
+                        "field": "document",
+                        "message": str(exc),
+                    }],
+                },
+                "variant_memory": variants[target],
+                "diagnostics": diagnostics,
+            }
+
+        results.append(result)
+
+    return {
+        "source": {
+            "filename": filename,
+            "sha256": hashlib.sha256(source_bytes).hexdigest(),
+        },
+        "model_candidates": candidates,
+        "results": results,
+        "review": {
+            "status": "REVIEW",
+        },
+    }
 
 def print_import_report(result: dict) -> None:
     """Gibt ein strukturiertes Importergebnis auf der Konsole aus."""

@@ -39,43 +39,96 @@ def extract_deterministic_gpu_fields(source: str) -> dict:
 
 def normalize_gpu_identity_and_apis(source, specs, evidence, issues):
     """Normalisiert GPU-Identität und Grafik-APIs."""
-    # GPU-Hersteller und Chipbezeichnung trennen
-    gpu_line = re.search(
-        r"(?im)^Graphics Processing Unit:\s*"
-        r"(NVIDIA|AMD|ATI|Intel)\s+(.+?)\s*$",
-        source
+    # GPU-Identitäten aus strukturierten Datenblättern
+    # und natürlich formulierten Handbüchern erkennen.
+    gpu_patterns = (
+        re.compile(
+            r"(?im)^Graphics Processing Unit:\s*"
+            r"(NVIDIA|AMD|ATI|Intel)\s+(.+?)\s*$"
+        ),
+        re.compile(
+            r"(?im)\bPowered by\s+"
+            r"(NVIDIA|AMD|ATI|Intel)\s+"
+            r"([^\r\n]+?)\s+"
+            r"Graphics Processing Unit\s*\(GPU\)"
+        ),
     )
 
-    if gpu_line:
-        vendor = gpu_line.group(1)
-        chip = gpu_line.group(2).strip()
-        original = gpu_line.group(0).strip()
+    identities = {}
 
-        if specs.get("gpu_manufacturer") in (None, vendor):
-            if specs.get("gpu_chip") in (
-                None, chip, f"{vendor} {chip}"
-            ):
-                specs["gpu_manufacturer"] = vendor
-                specs["gpu_chip"] = chip
+    for pattern in gpu_patterns:
+        for match in pattern.finditer(source):
+            vendor = match.group(1)
+            chip = match.group(2).strip()
+            original = match.group(0).strip()
 
-                evidence["gpu_manufacturer"] = {
-                    "value": vendor,
-                    "evidence": original,
-                    "origin": "deterministic"
-                }
-                evidence["gpu_chip"] = {
-                    "value": chip,
-                    "evidence": original,
-                    "origin": "deterministic"
-                }
-            else:
+            key = (
+                vendor.casefold(),
+                chip.casefold(),
+            )
+
+            identities.setdefault(
+                key,
+                (vendor, chip, original),
+            )
+
+    if len(identities) > 1:
+        # Unterschiedliche GPUs im selben Quelldokument.
+        # Keine dokumentweite automatische Ergänzung.
+        issues.append(
+            "GPU_IDENTITY_AMBIGUOUS: "
+            "Mehrere unterschiedliche GPU-Identitäten "
+            "im Quelldokument erkannt"
+        )
+
+    elif len(identities) == 1:
+        vendor, chip, original = next(
+            iter(identities.values())
+        )
+
+        existing_vendor = specs.get("gpu_manufacturer")
+        existing_chip = specs.get("gpu_chip")
+
+        vendor_matches = (
+            existing_vendor is None
+            or existing_vendor.casefold() == vendor.casefold()
+        )
+
+        chip_matches = (
+            existing_chip is None
+            or existing_chip.casefold()
+            in {
+                chip.casefold(),
+                f"{vendor} {chip}".casefold(),
+            }
+        )
+
+        if vendor_matches and chip_matches:
+            specs["gpu_manufacturer"] = vendor
+            specs["gpu_chip"] = chip
+
+            evidence["gpu_manufacturer"] = {
+                "value": vendor,
+                "evidence": original,
+                "origin": "deterministic",
+            }
+
+            evidence["gpu_chip"] = {
+                "value": chip,
+                "evidence": original,
+                "origin": "deterministic",
+            }
+
+        else:
+            if not vendor_matches:
+                issues.append(
+                    "GPU-Hersteller widerspricht dem Quelltext"
+                )
+
+            if not chip_matches:
                 issues.append(
                     "GPU-Chip widerspricht dem Quelltext"
                 )
-        else:
-            issues.append(
-                "GPU-Hersteller widerspricht dem Quelltext"
-        )
 
     # Grafik-APIs aus eindeutigen Quellenzeilen ableiten
     api_patterns = {

@@ -95,7 +95,7 @@ def verify_api_support_evidence(
             return False
 
         match = re.fullmatch(
-            r"(DirectX|OpenGL)\s+(\d+(?:\.\d+)*)",
+            r"(Direct\s*X|OpenGL)\s+(\d+(?:\.\d+)*)",
             value,
             flags=re.IGNORECASE,
         )
@@ -105,8 +105,13 @@ def verify_api_support_evidence(
 
         api_name, version = match.groups()
 
+        if re.fullmatch(r"Direct\s*X", api_name, re.IGNORECASE):
+            api_pattern = r"\bDirect\s*X\b"
+        else:
+            api_pattern = rf"\b{re.escape(api_name)}\b"
+
         if not re.search(
-            rf"\b{re.escape(api_name)}\b",
+            api_pattern,
             snippet,
             flags=re.IGNORECASE,
         ):
@@ -119,6 +124,65 @@ def verify_api_support_evidence(
             return False
 
     return True
+
+def verify_manual_gpu_evidence(
+    field: str,
+    value,
+    snippet: str,
+) -> bool:
+    """Prüft explizite technische Angaben in Handbuch-Aufzählungen."""
+
+    if not isinstance(value, str) or not value.strip():
+        return False
+
+    if field in {"gpu_manufacturer", "gpu_chip"}:
+        match = re.fullmatch(
+            r"Powered by\s+(ATI|AMD|NVIDIA|Intel)\s+"
+            r"(.+?)\s+Graphics Processing Unit\s*\(GPU\)",
+            snippet,
+            flags=re.IGNORECASE,
+        )
+
+        if not match:
+            return False
+
+        manufacturer, chip = match.groups()
+
+        expected = (
+            manufacturer
+            if field == "gpu_manufacturer"
+            else chip
+        )
+
+        return normalize_evidence(value) == normalize_evidence(expected)
+
+    if field == "interface":
+        match = re.fullmatch(
+            r"Supports\s+(AGP\s*(?:[1248]\s*[Xx])|PCI Express)",
+            snippet,
+            flags=re.IGNORECASE,
+        )
+
+        return bool(
+            match
+            and normalize_evidence(match.group(1))
+            == normalize_evidence(value)
+        )
+
+    if field == "memory_type":
+        match = re.fullmatch(
+            r"Integrated with\s+.+?\s+(DDR(?:2|3|4|5)?)\s+memory",
+            snippet,
+            flags=re.IGNORECASE,
+        )
+
+        return bool(
+            match
+            and normalize_evidence(match.group(1))
+            == normalize_evidence(value)
+        )
+
+    return False
 
 def verify_gpu_field_evidence(
     field: str,
@@ -135,6 +199,8 @@ def verify_gpu_field_evidence(
         return False
 
     snippet = snippet.strip().strip('"')
+    if verify_manual_gpu_evidence(field, value, snippet):
+        return True
 
     if field == "core_clock_mhz":
         if type(value) is not int or value < 0:

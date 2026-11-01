@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field as dataclass_field
 from llm_import.validation import normalize_evidence, verify_value, verify_api_support_evidence, verify_gpu_field_evidence, GPU_SEMANTICALLY_VERIFIED_FIELDS, verify_api_support_evidence
-
+import re
 
 @dataclass
 class ReviewFinding:
@@ -268,9 +268,19 @@ def evaluate_gpu_evidence(
             continue
 
         if field == "api_support":
+            api_evidence = item.get("evidence")
+
+            if isinstance(api_evidence, str):
+                quoted = re.findall(r'"([^"]+)"', api_evidence)
+
+                if quoted:
+                    api_evidence = quoted
+                elif len(value) == 1 and api_evidence.strip():
+                    api_evidence = [api_evidence]
+
             valid = verify_api_support_evidence(
                 value,
-                item.get("evidence"),
+                api_evidence,
                 source,
             )
         else:

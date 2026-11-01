@@ -16,6 +16,8 @@ from scripts.import_llm import (
     DEFAULT_URL,
 )
 
+from llm_import.review_package import plan_review_package
+
 url = "http://127.0.0.1:8080"
 user = "nina"
 filename = "vga_manual_r92s128t_e.pdf"
@@ -107,6 +109,16 @@ result = process_multi_model_document(
     model="qwen3.5:4b",
     ollama_url=DEFAULT_URL,
 )
+
+print("\n===== NEXTCLOUD REVIEW-PAKET: DRY-RUN =====")
+
+plan = plan_review_package(result)
+
+for entry in plan:
+    print(f"[{entry['status']}] {entry['path']}")
+
+print(f"\nGeplante Dateien: {len(plan)}")
+print("Schreiboperationen: keine")
 
 for item in result["results"]:
     classification = item.get("classification", {})

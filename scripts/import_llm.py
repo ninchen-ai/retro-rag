@@ -46,6 +46,8 @@ from llm_import.normalizers import (
 )
 from import_pg import CATEGORIES, parse_md
 from llm_import.classification import validate_classification
+from llm_import.target_model import build_target_model_instruction
+
 #from contextlib import redirect_stdout
 #from io import StringIO
 
@@ -418,6 +420,7 @@ def extract_gpu_document(
     model: str,
     ollama_url: str,
     diagnostics: list[str] | None = None,
+    target_model: str | None = None,
 ):
 
     if diagnostics is None:
@@ -425,8 +428,7 @@ def extract_gpu_document(
     """GPU-Extraktion und Validierung (Übergangsfunktion)."""
     # Fachliche Verarbeitung aus dem bisherigen main().
     schema = load_schema(category)
-    extraction, er = call_ollama(
-        ollama_url, model,
+    extraction_prompt = (
         "Extrahiere die technischen Eigenschaften für eine Retro-Grafikkarte. "
         "Gib für jedes Feld ein Objekt mit value und evidence zurück. "
         "evidence MUSS ein unveränderter, wörtlicher Ausschnitt des Dokuments sein, "
@@ -437,9 +439,23 @@ def extract_gpu_document(
         "Werte, Einheiten und Namen nicht zu snake_case umschreiben. "
         "WICHTIG: MB ist nicht dasselbe wie MiB. vram_mib nur setzen, wenn MiB "
         "ausdrücklich belegt ist, sonst null mit Warnung. "
-        "Nenne erkennbare Widersprüche in warnings.",
-        source, build_extraction_schema(schema),
+        "Nenne erkennbare Widersprüche in warnings."
     )
+
+    if target_model is not None:
+        extraction_prompt += " " + build_target_model_instruction(
+            manufacturer,
+            target_model,
+        )
+
+    extraction, er = call_ollama(
+        ollama_url,
+        model,
+        extraction_prompt,
+        source,
+        build_extraction_schema(schema),
+    )
+
     specs, issues, evidence, validation_issues = validate_specs(extraction, schema, source)
     review = ReviewReport()
     # Unabhängige Sicherheitsprüfung des Quelldokuments

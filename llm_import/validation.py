@@ -270,6 +270,115 @@ def verify_video_outputs_evidence(
 
     return True
 
+def verify_minimum_os_requirements(
+    values: list,
+    evidence: list,
+    source: str,
+) -> bool:
+    """Validiert OS-Mindestanforderungen gegen den PDF-Quelltext."""
+
+    if not isinstance(values, list) or not values:
+        return False
+
+    if not isinstance(evidence, list) or not evidence:
+        return False
+
+    if not isinstance(source, str) or not source.strip():
+        return False
+
+    # Ein gemeinsamer Beleg oder ein Beleg pro Betriebssystem.
+    if len(evidence) not in (1, len(values)):
+        return False
+
+    section_match = re.search(
+        r"(?im)^Minimum System Requirements?[ \t]*$",
+        source,
+    )
+
+    if not section_match:
+        return False
+
+    remaining = source[section_match.end():]
+
+    # Nicht in spätere Seiten oder Dokumentabschnitte laufen.
+    section_boundary = re.search(
+        r"(?im)^[ \t]*(?:"
+        r"\[PDF-Seite \d+\]"
+        r"|Driver Installation\b[^\r\n]*"
+        r"|BIOS Flashing\b[^\r\n]*"
+        r"|Table of Contents"
+        r")[ \t]*$",
+        remaining,
+    )
+
+    if section_boundary:
+        remaining = remaining[:section_boundary.start()]
+
+    # Nur den Anfang des Mindestanforderungsabschnitts prüfen.
+    remaining = "\n".join(remaining.splitlines()[:15])
+
+    os_line_match = re.search(
+        r"(?im)^[^\r\n]*?\b"
+        r"(Operating Systems?\s+([^\r\n]+))",
+        remaining,
+    )
+
+    if not os_line_match:
+        return False
+
+    os_line = os_line_match.group(1).strip()
+    os_text = os_line_match.group(2).strip()
+
+    # Betriebssystemversionen tatsächlich aus der OS-Zeile lesen.
+    source_versions = set(
+        match.casefold()
+        for match in re.findall(
+            r"(?i)(?<![a-z0-9])"
+            r"(?:98se|98|2000|me|xp)"
+            r"(?![a-z0-9])",
+            os_text,
+        )
+    )
+
+    valid_versions = {
+        "98", "98se", "2000", "me", "xp"
+    }
+
+    normalized_source_line = normalize_evidence(os_line)
+
+    # Jeder Beleg muss zur richtigen Originalzeile gehören.
+    for snippet in evidence:
+        if not isinstance(snippet, str) or not snippet.strip():
+            return False
+
+        normalized_snippet = normalize_evidence(snippet)
+
+        if normalized_snippet != normalized_source_line:
+            return False
+
+    # Alle extrahierten Betriebssysteme einzeln überprüfen.
+    for value in values:
+        if not isinstance(value, str):
+            return False
+
+        normalized_value = value.strip().casefold()
+
+        normalized_value = re.sub(
+            r"^(?:windows|win)\s*",
+            "",
+            normalized_value,
+        )
+
+        version = re.sub(r"\s+", "", normalized_value)
+
+        if version not in valid_versions:
+            return False
+
+        if version not in source_versions:
+            return False
+
+    return True
+
 def verify_gpu_field_evidence(
     field: str,
     value,
@@ -440,7 +549,8 @@ GPU_SEMANTICALLY_VERIFIED_FIELDS = frozenset({
     "interface",
     "dimensions_mm",
     "api_support",
-    "video_outputs"
+    "video_outputs",
+    "minimum_os_requirements",
 })
 
 

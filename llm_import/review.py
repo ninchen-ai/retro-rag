@@ -1,7 +1,7 @@
 """Strukturierte Review-Entscheidungen für den LLM-Importer."""
 
 from dataclasses import dataclass, field as dataclass_field
-from llm_import.validation import normalize_evidence, verify_value, verify_api_support_evidence, verify_gpu_field_evidence, GPU_SEMANTICALLY_VERIFIED_FIELDS, verify_api_support_evidence, verify_video_outputs_evidence
+from llm_import.validation import normalize_evidence, verify_value, verify_api_support_evidence, verify_gpu_field_evidence, GPU_SEMANTICALLY_VERIFIED_FIELDS, verify_api_support_evidence, verify_video_outputs_evidence, verify_minimum_os_requirements
 import re
 
 @dataclass
@@ -305,6 +305,30 @@ def evaluate_gpu_evidence(
             valid = verify_video_outputs_evidence(
                 value,
                 output_evidence,
+                source,
+            )
+
+        elif field == "minimum_os_requirements":
+            os_evidence = item.get("evidence")
+
+            if isinstance(os_evidence, str):
+                quoted = re.findall(
+                    r'"([^"]+)"',
+                    os_evidence,
+                )
+
+                if quoted:
+                    os_evidence = quoted
+                elif (
+                    isinstance(value, list)
+                    and len(value) == 1
+                    and os_evidence.strip()
+                ):
+                    os_evidence = [os_evidence]
+
+            valid = verify_minimum_os_requirements(
+                value,
+                os_evidence,
                 source,
             )
 

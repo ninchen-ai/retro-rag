@@ -68,6 +68,10 @@ fields:
     type: string
     nullable: true
 
+  minimum_os_requirements:
+    type: list
+    items: string
+
   supported_operating_systems:
     type: list
     items: string

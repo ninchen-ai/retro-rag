@@ -49,16 +49,28 @@ Keine bestätigten Angaben vorhanden.
 Keine bestätigten Angaben vorhanden.
 {% endfor %}
 
-## Treiber und Betriebssysteme
+## Betriebssystemanforderungen
+
+{% for os in specs.minimum_os_requirements %}
+- {{ os }}
+{% else %}
+Keine dokumentierten Angaben vorhanden.
+{% endfor %}
+
+## Unterstützte Betriebssysteme
 
 {% for os in specs.supported_operating_systems %}
 - {{ os }}
 {% else %}
-Keine bestätigten Betriebssystemangaben vorhanden.
+Keine ausdrücklich bestätigten Angaben vorhanden.
 {% endfor %}
 
+## Treiber
+
 {% for driver in specs.drivers %}
-- Treiber: {{ driver }}
+- {{ driver }}
+{% else %}
+Keine bestätigten Treiberangaben vorhanden.
 {% endfor %}
 
 ## Quellen und Belege

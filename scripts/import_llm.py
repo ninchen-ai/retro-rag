@@ -49,6 +49,9 @@ from llm_import.classification import validate_classification
 from llm_import.target_model import build_target_model_instruction
 from llm_import.model_candidates import detect_model_candidates
 from llm_import.variant_evidence import inspect_variant_memory
+from llm_import.model_context import find_shared_board_layout
+from llm_import.video_evidence import suggest_video_evidence, diagnose_model_video_outputs
+from llm_import.validation import verify_video_outputs_evidence
 
 #from contextlib import redirect_stdout
 #from io import StringIO
@@ -623,6 +626,33 @@ def extract_gpu_document(
     normalize_gpu_identity_and_apis(
         source, specs, evidence, issues
     )
+
+    # Modellbezogene Quellenprüfung – ausschließlich diagnostisch.
+    # Keine Änderung an specs, evidence oder Review-Entscheidungen.
+    if target_model is not None:
+        video_diagnostic = diagnose_model_video_outputs(
+            source=source,
+            target_model=target_model,
+            values=specs.get("video_outputs"),
+        )
+
+        emit_diagnostic(
+            diagnostics,
+            "video_outputs Modellkontext: "
+            f"{video_diagnostic['context_status']}",
+        )
+
+        emit_diagnostic(
+            diagnostics,
+            "video_outputs alternative Belege: "
+            f"{video_diagnostic['suggestions']}",
+        )
+
+        emit_diagnostic(
+            diagnostics,
+            "video_outputs alternative Quellenprüfung: "
+            f"{video_diagnostic['valid']}",
+        )
 
     # Technische Normalisierungsfehler in die zentrale
     # Review-Entscheidung übernehmen.

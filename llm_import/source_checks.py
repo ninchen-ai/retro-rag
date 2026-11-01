@@ -32,6 +32,21 @@ SPEC_LABELS = (
     "OpenGL Version Support",
 )
 
+MANUAL_FIELD_PATTERNS = {
+    "gpu_chip": (
+        r"\bPowered by\s+"
+        r"(?:NVIDIA|AMD|ATI|Intel)\s+"
+        r"[^\r\n]+?\s+"
+        r"Graphics Processing Unit\s*\(GPU\)"
+    ),
+    "interface": (
+        r"\bSupports\s+AGP\s+\d+\s*X\b"
+    ),
+    "api_support": (
+        r"\bSupports\s+Direct\s*X\s+"
+        r"\d+(?:\.\d+)*\b"
+    ),
+}
 
 def check_source(source, manufacturer, model):
     findings = []
@@ -66,14 +81,46 @@ def check_source(source, manufacturer, model):
                 "severity": "review",
             })
 
-    # 3. Erkennbare technische Felder zählen
-    recognized = sum(
-        bool(re.search(
-            rf"(?im)^\s*{re.escape(label)}\s*:",
-            source
-        ))
+    # 3. Unterschiedliche technische Eigenschaften zählen.
+    recognized_labels = {
+        label
         for label in SPEC_LABELS
-    )
+        if re.search(
+            rf"(?im)^\s*{re.escape(label)}\s*:",
+            source,
+        )
+    }
+
+    recognized_manual_fields = {
+        field
+        for field, pattern in MANUAL_FIELD_PATTERNS.items()
+        if re.search(pattern, source, re.IGNORECASE)
+    }
+
+    # Strukturierte Bezeichnungen und Handbuchformulierungen
+    # zu fachlichen Feldnamen zusammenführen.
+    label_to_field = {
+        "Graphics Processing Unit": "gpu_chip",
+        "Interface": "interface",
+        "Core Clock": "core_clock_mhz",
+        "Memory Speed": "memory_clock_mhz",
+        "Memory Size": "memory_size_mb",
+        "Memory Type": "memory_type",
+        "Memory Bus": "memory_bus_width_bit",
+        "HDCP Support": "hdcp_support",
+        "Card Dimension": "dimensions_mm",
+        "DirectX Version Support": "api_support",
+        "OpenGL Version Support": "api_support",
+    }
+
+    recognized_fields = {
+        label_to_field[label]
+        for label in recognized_labels
+    }
+
+    recognized_fields.update(recognized_manual_fields)
+
+    recognized = len(recognized_fields)
 
     if recognized < 2:
         findings.append({

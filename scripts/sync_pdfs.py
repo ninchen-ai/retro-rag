@@ -17,7 +17,28 @@ from urllib.request import Request, urlopen
 from xml.etree import ElementTree as ET
 
 DAV = {"d": "DAV:", "oc": "http://owncloud.org/ns"}
+EXCLUDED_PDF_DIRECTORIES = {"Import"}
 
+def is_excluded_pdf_path(path: str, user: str, folder: str) -> bool:
+    """Prüft, ob ein WebDAV-Pfad zum geschützten Importbereich gehört."""
+
+    prefix = (
+        "/remote.php/dav/files/"
+        + quote(user, safe="")
+        + "/"
+        + quote(folder.strip("/"), safe="/")
+        + "/"
+    )
+
+    clean = unquote(urlsplit(path).path)
+    root = unquote(prefix)
+
+    if not clean.startswith(root):
+        return False
+
+    relative = clean[len(root):].strip("/")
+
+    return relative.split("/", 1)[0] in EXCLUDED_PDF_DIRECTORIES
 
 def discover(url, user, password, folder):
     parsed = urlsplit(url)
@@ -102,8 +123,18 @@ def discover(url, user, password, folder):
             if clean.rstrip("/") == root.rstrip("/"):
                 continue
 
+            # WebDAV-Pfad zuerst validieren.
             if not clean.startswith(root):
-                raise ValueError("WebDAV-Pfad außerhalb von Retro-Computing")
+                raise ValueError(
+                    "WebDAV-Pfad außerhalb von Retro-Computing"
+                )
+
+            # Den gesamten Importbereich ausschließen.
+            relative_path = clean[len(root):].strip("/")
+            top_directory = relative_path.split("/", 1)[0]
+
+            if top_directory in EXCLUDED_PDF_DIRECTORIES:
+                continue
 
             is_dir = item.find(
                 ".//d:resourcetype/d:collection", DAV
@@ -593,6 +624,18 @@ def import_document(item, args):
 
     relative_path = path[len(prefix):]
 
+    project_folder = args.folder.strip("/") + "/"
+
+    if not relative_path.startswith(project_folder):
+        raise ValueError("PDF liegt außerhalb des Projektordners")
+
+    project_relative = relative_path[len(project_folder):]
+
+    if project_relative.split("/", 1)[0] in EXCLUDED_PDF_DIRECTORIES:
+        raise ValueError(
+            "PDF aus dem Importbereich darf nicht automatisch indiziert werden"
+        )
+
     if (
         not relative_path.startswith(args.folder.strip("/") + "/")
         or not relative_path.lower().endswith(".pdf")
@@ -716,6 +759,12 @@ def main():
             continue
 
         stored_path = existing["path"]
+        if stored_path and is_excluded_pdf_path(
+            stored_path,
+            args.user,
+            args.folder
+        ):
+            continue
 
         if stored_path and unquote(stored_path).startswith(unquote(root)):
             orphaned.append((file_id, existing))

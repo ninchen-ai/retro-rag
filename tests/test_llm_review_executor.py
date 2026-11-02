@@ -101,5 +101,48 @@ class TestReviewExecutor(unittest.TestCase):
         with self.assertRaises(ValueError):
             simulate_review_execution(self.plan)
 
+
+    def test_rejects_incomplete_file_pair(self):
+        # Review-Bericht entfernen.
+        self.plan["actions"].pop()
+
+        with self.assertRaisesRegex(
+            ValueError, "Unvollständiges Review-Dateipaar"
+        ):
+            simulate_review_execution(self.plan)
+
+    def test_rejects_extra_directory(self):
+        # Zusätzliches, nicht benötigtes Unterverzeichnis.
+        extra = {
+            "operation": "MKCOL",
+            "path": (
+                "Retro-Computing/Import/review/"
+                + "a" * 16 + "/Unneeded/"
+            ),
+            "status": "PLANNED",
+        }
+
+        self.plan["actions"].insert(3, extra)
+
+        with self.assertRaisesRegex(
+            ValueError, "Verzeichnisaktionen stimmen"
+        ):
+            simulate_review_execution(self.plan)
+
+    def test_rejects_invalid_content_size(self):
+        put_action = next(
+            action
+            for action in self.plan["actions"]
+            if action["operation"] == "PUT"
+        )
+
+        put_action["content_bytes"] = -1
+
+        with self.assertRaisesRegex(
+            ValueError, "Ungültige Dateigröße"
+        ):
+            simulate_review_execution(self.plan)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@
 
 from copy import deepcopy
 from llm_import.review_orchestrator import REVIEW_ROOT
+from llm_import.review_package import plan_review_directories
 
 ALLOWED_OPERATIONS = {
     "VERIFY_DIRECTORY",
@@ -85,6 +86,58 @@ def validate_execution_plan(dry_run: dict) -> None:
 
             if parent not in created_directories:
                 raise ValueError("PUT-Zielverzeichnis fehlt")
+
+    # Vollständige strukturelle Prüfung des Dateipakets.
+    put_actions = [
+        action
+        for action in actions
+        if action["operation"] == "PUT"
+    ]
+
+    if not put_actions:
+        raise ValueError("Review-Paket enthält keine Dateien")
+
+    # Verwendet die vorhandene strenge Pfadprüfung.
+    expected_directories = plan_review_directories(put_actions)
+
+    actual_directories = [
+        action["path"]
+        for action in actions
+        if action["operation"] == "MKCOL"
+    ]
+
+    if actual_directories != expected_directories:
+        raise ValueError(
+            "Verzeichnisaktionen stimmen nicht mit dem Dateipaket überein"
+        )
+
+    # Pro Modell müssen Steckbrief und Review-Bericht vorhanden sein.
+    model_files = {}
+
+    for action in put_actions:
+        path = action["path"]
+        directory, filename = path.rsplit("/", 1)
+        model = directory.rsplit("/", 1)[1]
+
+        model_files.setdefault(directory, set()).add(filename)
+
+        # content_bytes ist eine Planungsinformation, kein Dateiinhalt.
+        size = action.get("content_bytes")
+
+        if type(size) is not int or size <= 0:
+            raise ValueError("Ungültige Dateigröße im Review-Plan")
+
+    for directory, filenames in model_files.items():
+        model = directory.rsplit("/", 1)[1]
+
+        if filenames != {
+            f"{model}.md",
+            f"{model}.review.md",
+        }:
+            raise ValueError(
+                f"Unvollständiges Review-Dateipaar: {directory}"
+            )
+
 
 def simulate_review_execution(
     dry_run: dict,

@@ -6,6 +6,7 @@ from llm_import.review_resume import (
     sha256_content,
     inspect_review_upload,
     inspect_review_package,
+    verify_uncertain_review_upload,
 )
 from unittest.mock import patch
 
@@ -255,6 +256,77 @@ class TestReviewResume(unittest.TestCase):
             inspect_review_package(package, **self.package_args())
 
         mock_inspect.assert_not_called()
+
+
+    def test_uncertain_upload_confirmed(self):
+        with patch(
+            "llm_import.review_resume.read_review_file",
+            return_value=b"# GPU",
+        ):
+            result = verify_uncertain_review_upload(
+                **self.package_args(),
+                path="Retro-Computing/Import/review/test.md",
+                local_content=b"# GPU",
+            )
+
+        self.assertEqual(result["status"], "CONFIRMED")
+        self.assertEqual(
+            result["local_sha256"],
+            result["remote_sha256"],
+        )
+
+    def test_uncertain_upload_missing(self):
+        with patch(
+            "llm_import.review_resume.read_review_file",
+            return_value=None,
+        ):
+            result = verify_uncertain_review_upload(
+                **self.package_args(),
+                path="Retro-Computing/Import/review/test.md",
+                local_content=b"# GPU",
+            )
+
+        self.assertEqual(result["status"], "MISSING")
+
+    def test_uncertain_upload_conflict(self):
+        with patch(
+            "llm_import.review_resume.read_review_file",
+            return_value=b"# Andere GPU",
+        ):
+            result = verify_uncertain_review_upload(
+                **self.package_args(),
+                path="Retro-Computing/Import/review/test.md",
+                local_content=b"# GPU",
+            )
+
+        self.assertEqual(result["status"], "CONFLICT")
+
+    def test_uncertain_upload_network_error(self):
+        with patch(
+            "llm_import.review_resume.read_review_file",
+            side_effect=RuntimeError("Verbindung abgebrochen"),
+        ):
+            result = verify_uncertain_review_upload(
+                **self.package_args(),
+                path="Retro-Computing/Import/review/test.md",
+                local_content=b"# GPU",
+            )
+
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["error"], "RuntimeError")
+
+    def test_uncertain_upload_invalid_content_no_network(self):
+        with patch(
+            "llm_import.review_resume.read_review_file"
+        ) as mock_read:
+            with self.assertRaises(ValueError):
+                verify_uncertain_review_upload(
+                    **self.package_args(),
+                    path="Retro-Computing/Import/review/test.md",
+                    local_content="# GPU",
+                )
+
+            mock_read.assert_not_called()
 
 
 if __name__ == "__main__":

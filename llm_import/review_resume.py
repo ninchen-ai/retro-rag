@@ -171,3 +171,53 @@ def inspect_review_package(
         "file_count": len(file_plan),
         "results": results,
     }
+
+def verify_uncertain_review_upload(
+    *,
+    base_url: str,
+    user: str,
+    password: str,
+    path: str,
+    local_content: bytes,
+) -> dict:
+    """Prüft den Zustand nach einem unklaren PUT-Ergebnis.
+
+    Ausschließlich lesend. Keine erneute Übertragung.
+    """
+
+    # Ungültige Eingaben vor jeglichem Netzwerkzugriff ablehnen.
+    local_hash = sha256_content(local_content)
+
+    try:
+        remote_content = read_review_file(
+            base_url=base_url,
+            user=user,
+            password=password,
+            path=path,
+        )
+    except Exception as exc:
+        return {
+            "path": path,
+            "status": "UNKNOWN",
+            "local_sha256": local_hash,
+            "remote_sha256": None,
+            "error": type(exc).__name__,
+        }
+
+    decision = decide_review_upload(
+        local_content=local_content,
+        remote_content=remote_content,
+    )
+
+    status_mapping = {
+        "UPLOAD_REQUIRED": "MISSING",
+        "UNCHANGED": "CONFIRMED",
+        "CONFLICT": "CONFLICT",
+    }
+
+    return {
+        "path": path,
+        "status": status_mapping[decision["status"]],
+        "local_sha256": local_hash,
+        "remote_sha256": decision["remote_sha256"],
+    }

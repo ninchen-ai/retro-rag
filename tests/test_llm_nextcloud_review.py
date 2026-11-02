@@ -547,5 +547,36 @@ class TestNextcloudReview(unittest.TestCase):
                 read_review_file(**args)
 
 
+    @patch("llm_import.nextcloud_review.build_opener")
+    def test_put_http_409_is_error(self, mock_opener):
+        mock_opener.return_value.open.side_effect = HTTPError(
+            url="http://127.0.0.1:8080",
+            code=409,
+            msg="Conflict",
+            hdrs=None,
+            fp=None,
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError, "HTTP 409"
+        ):
+            upload_review_file(**self.args)
+
+    @patch("llm_import.nextcloud_review.build_opener")
+    def test_put_http_412_is_conflict(self, mock_opener):
+        mock_opener.return_value.open.side_effect = HTTPError(
+            url="http://127.0.0.1:8080",
+            code=412,
+            msg="Precondition Failed",
+            hdrs=None,
+            fp=None,
+        )
+
+        result = upload_review_file(**self.args)
+
+        self.assertEqual(result["status"], "CONFLICT")
+        self.assertEqual(result["http_status"], 412)
+
+
 if __name__ == "__main__":
     unittest.main()

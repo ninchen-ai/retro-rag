@@ -137,22 +137,13 @@ def _execute_review_put(request: Request) -> dict:
                 "http_status": response.status,
             }
 
+
     except HTTPError as exc:
         if exc.code == 412:
             return {
                 "status": "CONFLICT",
                 "http_status": 412,
             }
-
-        if exc.code == 409:
-            return {
-                "status": "CONFLICT",
-                "http_status": 409,
-            }
-
-        raise RuntimeError(
-            f"WebDAV-Upload fehlgeschlagen: HTTP {exc.code}"
-        ) from exc
 
         raise RuntimeError(
             f"WebDAV-Upload fehlgeschlagen: HTTP {exc.code}"
@@ -267,10 +258,6 @@ def create_review_directory(
                 "http_status": 405,
                 "path": path,
             }
-
-        raise RuntimeError(
-            f"MKCOL fehlgeschlagen: HTTP {exc.code}"
-        ) from exc
 
         raise RuntimeError(
             f"MKCOL fehlgeschlagen: HTTP {exc.code}"

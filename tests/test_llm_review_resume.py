@@ -7,6 +7,7 @@ from llm_import.review_resume import (
     inspect_review_package,
     verify_uncertain_review_upload,
     plan_package_resume,
+    validate_package_resume,
 )
 from unittest.mock import patch
 
@@ -440,6 +441,63 @@ class TestReviewResume(unittest.TestCase):
             [item["action"] for item in result["decisions"]],
             ["BLOCK", "BLOCK"],
         )
+
+
+    def make_bound_precheck(self):
+        from llm_import.review_package import plan_review_package
+
+        package = self.make_package()
+        plan = plan_review_package(package)
+
+        results = []
+        for entry in plan:
+            results.append({
+                "path": entry["path"],
+                "status": "UPLOAD_REQUIRED",
+                "local_sha256": sha256_content(
+                    entry["content"].encode("utf-8")
+                ),
+                "remote_sha256": None,
+            })
+
+        return package, {
+            "mode": "PRECHECK",
+            "status": "READY",
+            "file_count": len(results),
+            "results": results,
+        }
+
+    def test_bound_resume_valid_package(self):
+        package, precheck = self.make_bound_precheck()
+
+        result = validate_package_resume(package, precheck)
+
+        self.assertEqual(result["status"], "READY")
+        self.assertEqual(len(result["decisions"]), 4)
+
+    def test_bound_resume_rejects_foreign_path(self):
+        package, precheck = self.make_bound_precheck()
+        precheck["results"][0]["path"] = (
+            "Retro-Computing/Hardware/foreign.md"
+        )
+
+        with self.assertRaisesRegex(ValueError, "Fremder Dateipfad"):
+            validate_package_resume(package, precheck)
+
+    def test_bound_resume_rejects_wrong_hash(self):
+        package, precheck = self.make_bound_precheck()
+        precheck["results"][0]["local_sha256"] = "0" * 64
+
+        with self.assertRaisesRegex(ValueError, "SHA-256"):
+            validate_package_resume(package, precheck)
+
+    def test_bound_resume_rejects_false_unchanged(self):
+        package, precheck = self.make_bound_precheck()
+        precheck["results"][0]["status"] = "UNCHANGED"
+        precheck["results"][0]["remote_sha256"] = "f" * 64
+
+        with self.assertRaisesRegex(ValueError, "UNCHANGED"):
+            validate_package_resume(package, precheck)
 
 
 if __name__ == "__main__":

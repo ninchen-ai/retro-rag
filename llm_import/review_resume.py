@@ -300,3 +300,98 @@ def plan_package_resume(precheck: dict) -> dict:
         "file_count": file_count,
         "decisions": decisions,
     }
+
+def validate_package_resume(
+    import_result: dict,
+    precheck: dict,
+) -> dict:
+    """Bindet eine Wiederanlaufentscheidung an das Originalpaket.
+
+    Rein lokal: keine Netzwerk- oder Schreiboperationen.
+    """
+
+    # Originalpaket erneut erzeugen und Ausführungsplan validieren.
+    file_plan = plan_review_package(import_result)
+    dry_run = build_review_dry_run(import_result)
+    validate_execution_plan(dry_run)
+
+    if not isinstance(precheck, dict):
+        raise ValueError("Ungültige Paketvorprüfung")
+
+    if precheck.get("mode") != "PRECHECK":
+        raise ValueError("Ungültiger Vorprüfungsmodus")
+
+    results = precheck.get("results")
+    if not isinstance(results, list):
+        raise ValueError("Ungültige Vorprüfungsergebnisse")
+
+    if precheck.get("file_count") != len(file_plan):
+        raise ValueError("Dateianzahl stimmt nicht überein")
+
+    expected = {
+        entry["path"]: sha256_content(
+            entry["content"].encode("utf-8")
+        )
+        for entry in file_plan
+    }
+
+    if len(expected) != len(file_plan):
+        raise ValueError("Doppelte Quelldateipfade")
+
+    received = {}
+
+    for item in results:
+        if not isinstance(item, dict):
+            raise ValueError("Ungültiger Dateieintrag")
+
+        path = item.get("path")
+
+        if not isinstance(path, str) or path not in expected:
+            raise ValueError("Fremder Dateipfad im Wiederanlauf")
+
+        if path in received:
+            raise ValueError("Doppelter Dateipfad")
+
+        received[path] = item
+
+    if set(received) != set(expected):
+        raise ValueError("Unvollständige Dateizuordnung")
+
+    for path, item in received.items():
+        status = item.get("status")
+        local_hash = item.get("local_sha256")
+        remote_hash = item.get("remote_sha256")
+
+        if status not in {
+            "UPLOAD_REQUIRED", "UNCHANGED", "CONFLICT"
+        }:
+            raise ValueError(
+                "Vorprüfung ist nicht vollständig erfolgreich"
+            )
+
+        if local_hash != expected[path]:
+            raise ValueError(
+                f"SHA-256 stimmt nicht mit Quelldatei überein: {path}"
+            )
+
+        if status == "UPLOAD_REQUIRED" and remote_hash is not None:
+            raise ValueError("Fehlende Datei besitzt Remote-Hash")
+
+        if status == "UNCHANGED" and remote_hash != local_hash:
+            raise ValueError("UNCHANGED ohne identische Prüfsumme")
+
+        if status == "CONFLICT" and (
+            not isinstance(remote_hash, str)
+            or remote_hash == local_hash
+        ):
+            raise ValueError("Ungültige Konflikt-Prüfsumme")
+
+    statuses = {item["status"] for item in received.values()}
+    expected_status = (
+        "BLOCKED" if "CONFLICT" in statuses else "READY"
+    )
+
+    if precheck.get("status") != expected_status:
+        raise ValueError("Widersprüchlicher Paketstatus")
+
+    return plan_package_resume(precheck)

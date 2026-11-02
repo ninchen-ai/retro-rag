@@ -16,6 +16,7 @@ from llm_import.nextcloud_review import (
     build_review_mkcol_request,
     create_review_directory,
     verify_review_directory,
+    read_review_file,
 )
 
 class TestNextcloudReview(unittest.TestCase):
@@ -399,6 +400,152 @@ class TestNextcloudReview(unittest.TestCase):
         )
 
         mock_verify.assert_called_once_with(**args)
+
+
+    def test_get_existing_review_file(self):
+        with patch(
+            "llm_import.nextcloud_review.build_opener"
+        ) as mock_opener:
+            response = Mock()
+            response.status = 200
+            response.read.return_value = b"# GPU"
+
+            mock_opener.return_value.open.return_value.__enter__.return_value = (
+                response
+            )
+
+            args = self.args.copy()
+            args.pop("content")
+
+            result = read_review_file(**args)
+
+            self.assertEqual(result, b"# GPU")
+
+            request = mock_opener.return_value.open.call_args.args[0]
+            self.assertEqual(request.get_method(), "GET")
+
+    def test_get_missing_review_file(self):
+        with patch(
+            "llm_import.nextcloud_review.build_opener"
+        ) as mock_opener:
+            mock_opener.return_value.open.side_effect = HTTPError(
+                url="http://127.0.0.1:8080",
+                code=404,
+                msg="Not Found",
+                hdrs=None,
+                fp=None,
+            )
+
+            args = self.args.copy()
+            args.pop("content")
+
+            self.assertIsNone(read_review_file(**args))
+
+    def test_get_empty_file_is_not_missing(self):
+        with patch(
+            "llm_import.nextcloud_review.build_opener"
+        ) as mock_opener:
+            response = Mock()
+            response.status = 200
+            response.read.return_value = b""
+
+            mock_opener.return_value.open.return_value.__enter__.return_value = (
+                response
+            )
+
+            args = self.args.copy()
+            args.pop("content")
+
+            self.assertEqual(read_review_file(**args), b"")
+
+    def test_get_rejects_oversized_file(self):
+        with patch(
+            "llm_import.nextcloud_review.build_opener"
+        ) as mock_opener:
+            response = Mock()
+            response.status = 200
+            response.read.return_value = b"x" * (2 * 1024 * 1024 + 1)
+
+            mock_opener.return_value.open.return_value.__enter__.return_value = (
+                response
+            )
+
+            args = self.args.copy()
+            args.pop("content")
+
+            with self.assertRaisesRegex(
+                RuntimeError, "Leselimit"
+            ):
+                read_review_file(**args)
+
+    def test_get_rejects_unsafe_path_without_network(self):
+        with patch(
+            "llm_import.nextcloud_review.build_opener"
+        ) as mock_opener:
+            args = self.args.copy()
+            args.pop("content")
+            args["path"] = "Retro-Computing/Hardware/test.md"
+
+            with self.assertRaises(ValueError):
+                read_review_file(**args)
+
+            mock_opener.assert_not_called()
+
+
+    def test_get_permission_denied(self):
+        with patch(
+            "llm_import.nextcloud_review.build_opener"
+        ) as mock_opener:
+            mock_opener.return_value.open.side_effect = HTTPError(
+                url="http://127.0.0.1:8080",
+                code=403,
+                msg="Forbidden",
+                hdrs=None,
+                fp=None,
+            )
+
+            args = self.args.copy()
+            args.pop("content")
+
+            with self.assertRaisesRegex(RuntimeError, "HTTP 403"):
+                read_review_file(**args)
+
+    def test_get_redirect_rejected(self):
+        with patch(
+            "llm_import.nextcloud_review.build_opener"
+        ) as mock_opener:
+            mock_opener.return_value.open.side_effect = HTTPError(
+                url="http://127.0.0.1:8080",
+                code=302,
+                msg="Found",
+                hdrs=None,
+                fp=None,
+            )
+
+            args = self.args.copy()
+            args.pop("content")
+
+            with self.assertRaisesRegex(RuntimeError, "HTTP 302"):
+                read_review_file(**args)
+
+    def test_get_network_failure(self):
+        from urllib.error import URLError
+
+        with patch(
+            "llm_import.nextcloud_review.build_opener"
+        ) as mock_opener:
+            mock_opener.return_value.open.side_effect = URLError(
+                "Connection refused"
+            )
+
+            args = self.args.copy()
+            args.pop("content")
+
+            with self.assertRaisesRegex(
+                RuntimeError, "WebDAV-Verbindung"
+            ):
+                read_review_file(**args)
+
 
 if __name__ == "__main__":
     unittest.main()

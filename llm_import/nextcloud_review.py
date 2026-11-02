@@ -395,3 +395,69 @@ def verify_review_directory(
     )
 
     return collection is not None
+
+MAX_REVIEW_READ_BYTES = 2 * 1024 * 1024
+
+def read_review_file(
+    *,
+    base_url: str,
+    user: str,
+    password: str,
+    path: str,
+) -> bytes | None:
+    """Liest eine Review-Datei begrenzt und ohne Schreibzugriff.
+
+    None bedeutet HTTP 404. Alle anderen Fehler werden gemeldet.
+    """
+
+    # Vorhandene URL-, Authentifizierungs- und Pfadvalidierung
+    # wiederverwenden. Dieser PUT-Request wird NICHT ausgeführt.
+    probe = build_review_put_request(
+        base_url=base_url,
+        user=user,
+        password=password,
+        path=path,
+        content="# validation",
+    )
+
+    request = Request(
+        url=probe.full_url,
+        method="GET",
+        headers={
+            "Authorization": probe.get_header("Authorization"),
+            "Accept": "text/markdown, application/octet-stream",
+        },
+    )
+
+    try:
+        with build_opener(NoRedirectHandler()).open(
+            request, timeout=30
+        ) as response:
+            if response.status != 200:
+                raise RuntimeError(
+                    f"Unerwartete GET-Antwort: HTTP {response.status}"
+                )
+
+            # Ein zusätzliches Byte erkennt zu große Antworten,
+            # auch wenn Content-Length fehlt oder falsch ist.
+            content = response.read(MAX_REVIEW_READ_BYTES + 1)
+
+            if len(content) > MAX_REVIEW_READ_BYTES:
+                raise RuntimeError(
+                    "Review-Datei überschreitet das Leselimit"
+                )
+
+            return content
+
+    except HTTPError as exc:
+        if exc.code == 404:
+            return None
+
+        raise RuntimeError(
+            f"WebDAV-GET fehlgeschlagen: HTTP {exc.code}"
+        ) from exc
+
+    except URLError as exc:
+        raise RuntimeError(
+            "WebDAV-Verbindung bei GET fehlgeschlagen"
+        ) from exc

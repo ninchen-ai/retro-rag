@@ -1,4 +1,3 @@
-
 import unittest
 
 from llm_import.review_resume import (
@@ -7,6 +6,7 @@ from llm_import.review_resume import (
     inspect_review_upload,
     inspect_review_package,
     verify_uncertain_review_upload,
+    plan_package_resume,
 )
 from unittest.mock import patch
 
@@ -327,6 +327,119 @@ class TestReviewResume(unittest.TestCase):
                 )
 
             mock_read.assert_not_called()
+
+
+    def test_resume_partially_uploaded_package(self):
+        precheck = {
+            "mode": "PRECHECK",
+            "file_count": 4,
+            "results": [
+                {"path": "a.md", "status": "UNCHANGED"},
+                {"path": "a.review.md", "status": "UNCHANGED"},
+                {"path": "b.md", "status": "UPLOAD_REQUIRED"},
+                {"path": "b.review.md", "status": "UPLOAD_REQUIRED"},
+            ],
+        }
+
+        result = plan_package_resume(precheck)
+
+        self.assertEqual(result["status"], "READY")
+        self.assertEqual(
+            [x["action"] for x in result["decisions"]],
+            [
+                "SKIP_IDENTICAL",
+                "SKIP_IDENTICAL",
+                "UPLOAD_CANDIDATE",
+                "UPLOAD_CANDIDATE",
+            ],
+        )
+
+    def test_resume_conflict_blocks_entire_package(self):
+        precheck = {
+            "mode": "PRECHECK",
+            "file_count": 2,
+            "results": [
+                {"path": "a.md", "status": "UPLOAD_REQUIRED"},
+                {"path": "b.md", "status": "CONFLICT"},
+            ],
+        }
+
+        result = plan_package_resume(precheck)
+
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertTrue(
+            all(x["action"] == "BLOCK" for x in result["decisions"])
+        )
+
+    def test_resume_unknown_blocks_package(self):
+        precheck = {
+            "mode": "PRECHECK",
+            "file_count": 2,
+            "results": [
+                {"path": "a.md", "status": "UNCHANGED"},
+                {"path": "b.md", "status": "UNKNOWN"},
+            ],
+        }
+
+        result = plan_package_resume(precheck)
+
+        self.assertEqual(result["status"], "BLOCKED")
+
+    def test_resume_rejects_incomplete_precheck(self):
+        precheck = {
+            "mode": "PRECHECK",
+            "file_count": 4,
+            "results": [
+                {"path": "a.md", "status": "UNCHANGED"},
+            ],
+        }
+
+        with self.assertRaises(ValueError):
+            plan_package_resume(precheck)
+
+
+    def test_resume_rejects_duplicate_paths(self):
+        precheck = {
+            "mode": "PRECHECK",
+            "file_count": 2,
+            "results": [
+                {"path": "a.md", "status": "UNCHANGED"},
+                {"path": "a.md", "status": "UPLOAD_REQUIRED"},
+            ],
+        }
+
+        with self.assertRaisesRegex(ValueError, "Doppelter Dateipfad"):
+            plan_package_resume(precheck)
+
+    def test_resume_rejects_unknown_status(self):
+        precheck = {
+            "mode": "PRECHECK",
+            "file_count": 1,
+            "results": [
+                {"path": "a.md", "status": "SUCCESS"},
+            ],
+        }
+
+        with self.assertRaisesRegex(ValueError, "Unbekannter Dateistatus"):
+            plan_package_resume(precheck)
+
+    def test_resume_skipped_blocks_package(self):
+        precheck = {
+            "mode": "PRECHECK",
+            "file_count": 2,
+            "results": [
+                {"path": "a.md", "status": "UPLOAD_REQUIRED"},
+                {"path": "b.md", "status": "SKIPPED"},
+            ],
+        }
+
+        result = plan_package_resume(precheck)
+
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertEqual(
+            [item["action"] for item in result["decisions"]],
+            ["BLOCK", "BLOCK"],
+        )
 
 
 if __name__ == "__main__":

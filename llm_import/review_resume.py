@@ -221,3 +221,82 @@ def verify_uncertain_review_upload(
         "local_sha256": local_hash,
         "remote_sha256": decision["remote_sha256"],
     }
+
+def plan_package_resume(precheck: dict) -> dict:
+    """Plant einen Wiederanlauf anhand einer Paketvorprüfung.
+
+    Rein lokale Auswertung; kein Netzwerk- oder Schreibzugriff.
+    """
+
+    if not isinstance(precheck, dict):
+        raise ValueError("Ungültige Paketvorprüfung")
+
+    if precheck.get("mode") != "PRECHECK":
+        raise ValueError("Nur PRECHECK-Ergebnisse erlaubt")
+
+    results = precheck.get("results")
+    file_count = precheck.get("file_count")
+
+    if not isinstance(results, list) or not results:
+        raise ValueError("Keine Dateiergebnisse vorhanden")
+
+    if type(file_count) is not int or file_count != len(results):
+        raise ValueError("Unvollständige Paketvorprüfung")
+
+    allowed = {
+        "UNCHANGED",
+        "UPLOAD_REQUIRED",
+        "CONFLICT",
+        "FAILED",
+        "UNKNOWN",
+        "SKIPPED",
+    }
+
+    seen = set()
+    decisions = []
+    blocked = False
+
+    for item in results:
+        if not isinstance(item, dict):
+            raise ValueError("Ungültiger Dateieintrag")
+
+        path = item.get("path")
+        status = item.get("status")
+
+        if not isinstance(path, str) or not path:
+            raise ValueError("Ungültiger Dateipfad")
+
+        if path in seen:
+            raise ValueError("Doppelter Dateipfad")
+
+        seen.add(path)
+
+        if status not in allowed:
+            raise ValueError(f"Unbekannter Dateistatus: {status}")
+
+        if status in {"CONFLICT", "FAILED", "UNKNOWN", "SKIPPED"}:
+            blocked = True
+
+        decisions.append({
+            "path": path,
+            "precheck_status": status,
+            "action": (
+                "SKIP_IDENTICAL" if status == "UNCHANGED"
+                else "UPLOAD_CANDIDATE" if status == "UPLOAD_REQUIRED"
+                else "BLOCK"
+            ),
+        })
+
+    # Bei einem einzigen problematischen Ergebnis
+    # wird kein Upload-Kandidat freigegeben.
+    if blocked:
+        for decision in decisions:
+            if decision["action"] == "UPLOAD_CANDIDATE":
+                decision["action"] = "BLOCK"
+
+    return {
+        "mode": "RESUME_PLAN",
+        "status": "BLOCKED" if blocked else "READY",
+        "file_count": file_count,
+        "decisions": decisions,
+    }

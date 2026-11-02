@@ -91,3 +91,64 @@ def plan_review_package(
             })
 
     return plan
+
+def plan_review_directories(
+    file_plan: list[dict],
+    root: str = "Retro-Computing/Import/review",
+) -> list[str]:
+    """Ermittelt benötigte Verzeichnisse in Eltern-Kind-Reihenfolge.
+
+    Keine Netzwerk- oder Schreiboperationen.
+    """
+
+    if root != "Retro-Computing/Import/review":
+        raise ValueError("Review-Zielverzeichnis nicht erlaubt")
+
+    if not file_plan:
+        raise ValueError("Leerer Review-Paketplan")
+
+    directories = set()
+
+    for entry in file_plan:
+        if not isinstance(entry, dict):
+            raise ValueError("Ungültiger Planeintrag")
+
+        path = entry.get("path")
+
+        if not isinstance(path, str):
+            raise ValueError("Ungültiger Dateipfad")
+
+        prefix = root + "/"
+
+        if not path.startswith(prefix):
+            raise ValueError("Dateipfad außerhalb des Review-Bereichs")
+
+        parts = path[len(prefix):].split("/")
+
+        if len(parts) != 3:
+            raise ValueError("Unerwartete Review-Pfadstruktur")
+
+        source_id, model, filename = parts
+
+        if source_id != safe_name(source_id):
+            raise ValueError("Ungültige Paket-ID")
+
+        if not re.fullmatch(r"[0-9a-f]{16}", source_id):
+            raise ValueError("Ungültige Paket-ID")
+
+        if model != safe_name(model):
+            raise ValueError("Ungültiger Modellname")
+
+        if filename not in {
+            f"{model}.md",
+            f"{model}.review.md",
+        }:
+            raise ValueError("Unerwarteter Review-Dateiname")
+
+        directories.add(f"{root}/{source_id}/")
+        directories.add(f"{root}/{source_id}/{model}/")
+
+    return sorted(
+        directories,
+        key=lambda path: (path.count("/"), path),
+    )

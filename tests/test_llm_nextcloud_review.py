@@ -12,7 +12,11 @@ from llm_import.nextcloud_review import (
     NoRedirectHandler,
     upload_review_file,
 )
-
+from llm_import.nextcloud_review import (
+    build_review_mkcol_request,
+    create_review_directory,
+    verify_review_directory,
+)
 
 class TestNextcloudReview(unittest.TestCase):
 
@@ -185,6 +189,216 @@ class TestNextcloudReview(unittest.TestCase):
             upload_review_file(**args)
 
         mock_build_opener.assert_not_called()
+
+    def test_build_mkcol_request(self):
+        args = self.args.copy()
+
+        args["path"] = (
+            "Retro-Computing/Import/review/"
+            "abcdef1234567890/GV-R92S128T/"
+        )
+        args.pop("content")
+
+        request = build_review_mkcol_request(**args)
+
+        self.assertEqual(request.get_method(), "MKCOL")
+        self.assertTrue(request.full_url.endswith("/GV-R92S128T/"))
+
+    def test_mkcol_rejects_path_traversal(self):
+        args = self.args.copy()
+
+        args["path"] = (
+            "Retro-Computing/Import/review/"
+            "../Hardware/"
+        )
+        args.pop("content")
+
+        with self.assertRaises(ValueError):
+            build_review_mkcol_request(**args)
+
+    @patch("llm_import.nextcloud_review.build_opener")
+    def test_mkcol_created(self, mock_build_opener):
+        response = Mock()
+        response.status = 201
+
+        opener = mock_build_opener.return_value
+        opener.open.return_value.__enter__.return_value = response
+
+        args = self.args.copy()
+        args["path"] = (
+            "Retro-Computing/Import/review/"
+            "abcdef1234567890/GV-R92S128T/"
+        )
+        args.pop("content")
+
+        result = create_review_directory(**args)
+
+        self.assertEqual(result["status"], "CREATED")
+        self.assertEqual(result["http_status"], 201)
+
+    @patch("llm_import.nextcloud_review.verify_review_directory")
+    @patch("llm_import.nextcloud_review.build_opener")
+    def test_mkcol_existing_directory_verified(
+        self, mock_build_opener, mock_verify
+    ):
+        mock_build_opener.return_value.open.side_effect = HTTPError(
+            url="http://127.0.0.1:8080",
+            code=405,
+            msg="Method Not Allowed",
+            hdrs=None,
+            fp=None,
+        )
+
+        mock_verify.return_value = True
+
+        args = self.args.copy()
+        args["path"] = (
+            "Retro-Computing/Import/review/"
+            "abcdef1234567890/GV-R92S128T/"
+        )
+        args.pop("content")
+
+        result = create_review_directory(**args)
+
+        self.assertEqual(result["status"], "EXISTS")
+        self.assertEqual(result["http_status"], 405)
+
+        mock_verify.assert_called_once_with(**args)
+
+    @patch("llm_import.nextcloud_review.build_opener")
+    def test_propfind_confirms_directory(self, mock_build_opener):
+        xml = b"""<?xml version="1.0"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+          <d:href>/remote.php/dav/files/nina/Retro-Computing/Import/review/abcdef1234567890/GV-R92S128T/</d:href>
+            <d:propstat>
+              <d:prop>
+                <d:resourcetype>
+                  <d:collection/>
+                </d:resourcetype>
+              </d:prop>
+              <d:status>HTTP/1.1 200 OK</d:status>
+            </d:propstat>
+          </d:response>
+        </d:multistatus>"""
+
+        response = Mock()
+        response.status = 207
+        response.read.return_value = xml
+
+        opener = mock_build_opener.return_value
+        opener.open.return_value.__enter__.return_value = response
+
+        args = self.args.copy()
+        args["path"] = (
+            "Retro-Computing/Import/review/"
+            "abcdef1234567890/GV-R92S128T/"
+        )
+        args.pop("content")
+
+        self.assertTrue(verify_review_directory(**args))
+
+    @patch("llm_import.nextcloud_review.build_opener")
+    def test_propfind_rejects_file_as_directory(
+        self, mock_build_opener
+    ):
+        xml = b"""<?xml version="1.0"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+          <d:href>/remote.php/dav/files/nina/Retro-Computing/Import/review/abcdef1234567890/GV-R92S128T/</d:href>
+            <d:propstat>
+              <d:prop><d:resourcetype/></d:prop>
+              <d:status>HTTP/1.1 200 OK</d:status>
+            </d:propstat>
+          </d:response>
+        </d:multistatus>"""
+
+        response = Mock()
+        response.status = 207
+        response.read.return_value = xml
+
+        opener = mock_build_opener.return_value
+        opener.open.return_value.__enter__.return_value = response
+
+        args = self.args.copy()
+        args["path"] = (
+            "Retro-Computing/Import/review/"
+            "abcdef1234567890/GV-R92S128T/"
+        )
+        args.pop("content")
+
+        self.assertFalse(verify_review_directory(**args))
+
+    @patch("llm_import.nextcloud_review.build_opener")
+    def test_propfind_rejects_wrong_directory(self, mock_build_opener):
+        xml = b"""<?xml version="1.0"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+            <d:href>/remote.php/dav/files/nina/Retro-Computing/Hardware/</d:href>
+            <d:propstat>
+              <d:prop>
+                <d:resourcetype>
+                  <d:collection/>
+                </d:resourcetype>
+              </d:prop>
+              <d:status>HTTP/1.1 200 OK</d:status>
+            </d:propstat>
+          </d:response>
+        </d:multistatus>"""
+
+        response = Mock()
+        response.status = 207
+        response.read.return_value = xml
+
+        opener = mock_build_opener.return_value
+        opener.open.return_value.__enter__.return_value = response
+
+        args = self.args.copy()
+        args["path"] = (
+            "Retro-Computing/Import/review/"
+            "abcdef1234567890/GV-R92S128T/"
+        )
+        args.pop("content")
+
+        with self.assertRaises(RuntimeError) as context:
+            verify_review_directory(**args)
+
+        self.assertIn(
+            "gehört nicht zum Zielverzeichnis",
+            str(context.exception),
+        )
+
+    @patch("llm_import.nextcloud_review.verify_review_directory")
+    @patch("llm_import.nextcloud_review.build_opener")
+    def test_mkcol_rejects_unverified_directory(
+        self, mock_build_opener, mock_verify
+    ):
+        mock_build_opener.return_value.open.side_effect = HTTPError(
+            url="http://127.0.0.1:8080",
+            code=405,
+            msg="Method Not Allowed",
+            hdrs=None,
+            fp=None,
+        )
+
+        mock_verify.return_value = False
+
+        args = self.args.copy()
+        args["path"] = (
+            "Retro-Computing/Import/review/"
+            "abcdef1234567890/GV-R92S128T/"
+        )
+        args.pop("content")
+
+        with self.assertRaises(RuntimeError) as context:
+            create_review_directory(**args)
+
+        self.assertIn(
+            "kein Verzeichnis nachweisbar",
+            str(context.exception),
+        )
+
+        mock_verify.assert_called_once_with(**args)
 
 if __name__ == "__main__":
     unittest.main()

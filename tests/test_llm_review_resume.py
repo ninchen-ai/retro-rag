@@ -5,6 +5,7 @@ from llm_import.review_resume import (
     decide_review_upload,
     sha256_content,
     inspect_review_upload,
+    inspect_review_package,
 )
 from unittest.mock import patch
 
@@ -142,6 +143,119 @@ class TestReviewResume(unittest.TestCase):
                 )
 
             mock_read.assert_not_called()
+
+
+    def make_package(self):
+        return {
+            "results": [
+                {
+                    "source": {"sha256": "a" * 64},
+                    "classification": {"model": "GV-R92S128T"},
+                    "markdown": "# GPU 128",
+                    "review_markdown": "# Review 128",
+                },
+                {
+                    "source": {"sha256": "a" * 64},
+                    "classification": {"model": "GV-R92S64T"},
+                    "markdown": "# GPU 64",
+                    "review_markdown": "# Review 64",
+                },
+            ]
+        }
+
+    def package_args(self):
+        return {
+            "base_url": "http://127.0.0.1:8080",
+            "user": "nina",
+            "password": "test",
+        }
+
+    @patch("llm_import.review_resume.inspect_review_upload")
+    def test_package_all_files_missing(self, mock_inspect):
+        def inspect(**kwargs):
+            return {
+                "path": kwargs["path"],
+                "status": "UPLOAD_REQUIRED",
+                "local_sha256": "a" * 64,
+                "remote_sha256": None,
+            }
+
+        mock_inspect.side_effect = inspect
+
+        result = inspect_review_package(
+            self.make_package(), **self.package_args()
+        )
+
+        self.assertEqual(result["status"], "READY")
+        self.assertEqual(result["file_count"], 4)
+        self.assertEqual(mock_inspect.call_count, 4)
+
+    @patch("llm_import.review_resume.inspect_review_upload")
+    def test_package_all_files_unchanged(self, mock_inspect):
+        def inspect(**kwargs):
+            return {
+                "path": kwargs["path"],
+                "status": "UNCHANGED",
+                "local_sha256": "a" * 64,
+                "remote_sha256": "a" * 64,
+            }
+
+        mock_inspect.side_effect = inspect
+
+        result = inspect_review_package(
+            self.make_package(), **self.package_args()
+        )
+
+        self.assertEqual(result["status"], "READY")
+        self.assertTrue(
+            all(item["status"] == "UNCHANGED"
+                for item in result["results"])
+        )
+
+    @patch("llm_import.review_resume.inspect_review_upload")
+    def test_package_conflict_blocks_remaining(self, mock_inspect):
+        def inspect(**kwargs):
+            status = (
+                "CONFLICT" if mock_inspect.call_count == 2
+                else "UPLOAD_REQUIRED"
+            )
+            return {"path": kwargs["path"], "status": status}
+
+        mock_inspect.side_effect = inspect
+
+        result = inspect_review_package(
+            self.make_package(), **self.package_args()
+        )
+
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertEqual(
+            [item["status"] for item in result["results"]],
+            ["UPLOAD_REQUIRED", "CONFLICT", "SKIPPED", "SKIPPED"],
+        )
+        self.assertEqual(mock_inspect.call_count, 2)
+
+    @patch("llm_import.review_resume.inspect_review_upload")
+    def test_package_read_failure_blocks(self, mock_inspect):
+        mock_inspect.side_effect = RuntimeError("HTTP 403")
+
+        result = inspect_review_package(
+            self.make_package(), **self.package_args()
+        )
+
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertEqual(result["results"][0]["status"], "FAILED")
+        self.assertEqual(mock_inspect.call_count, 1)
+
+    @patch("llm_import.review_resume.inspect_review_upload")
+    def test_invalid_package_never_reads_remote(self, mock_inspect):
+        package = self.make_package()
+        package["results"][0]["review_markdown"] = ""
+
+        with self.assertRaises(ValueError):
+            inspect_review_package(package, **self.package_args())
+
+        mock_inspect.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

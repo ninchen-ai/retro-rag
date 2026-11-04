@@ -50,6 +50,36 @@ Include relevant visually prominent candidates; do not make up text.
 Do not decide whether content is approved for import."""
 
 
+DEFAULT_CANDIDATES = {
+    38: (
+        "Recommendations for Thermal Performance",
+        "ADD-IN CARD",
+        "FAN DIRECTION",
+    ),
+}
+
+
+def targeted_prompt(candidates: tuple[str, ...]) -> str:
+    """Ask only for visually grounded classification of supplied candidates.
+
+    The target labels are deliberately not supplied; this is a blind check.
+    """
+    lines = json.dumps(list(candidates), ensure_ascii=False)
+    return (
+        "Inspect the page image and classify ONLY these exact text candidates: "
+        + lines
+        + "\nDistinguish section headings from labels INSIDE or NEXT TO technical "
+          "drawings, and from figure captions. Bold or uppercase typography "
+          "alone does NOT imply a section heading. Judge spatial context. "
+          "If unclear, classify uncertain. Do not transcribe other page text. "
+          "Return JSON ONLY with an 'elements' array. For EACH candidate "
+          "return exactly one object with keys 'text', 'kind', 'reason'; "
+          "'kind' must be one of section_heading, figure_label, figure_caption, "
+          "body_text, uncertain. Keep each reason under 20 words. "
+          "Do not make approval decisions."
+    )
+
+
 def render_page(raw: bytes, page_number: int, dpi: int) -> bytes:
     if page_number < 1:
         raise ValueError("PDF page must be at least 1")
@@ -61,20 +91,22 @@ def render_page(raw: bytes, page_number: int, dpi: int) -> bytes:
 
 
 def query_ollama(png: bytes, *, model: str, url: str, cpu_only: bool,
-                 timeout: int) -> dict:
+                 timeout: int, prompt: str = PROMPT, num_ctx: int = 4096, num_predict: int | None = None) -> dict:
     payload = {
         "model": model,
         "stream": False,
         "format": "json",
+        "think": False,
         "keep_alive": 0,
         "options": {
             "temperature": 0,
-            "num_ctx": 4096,
+            "num_ctx": num_ctx,
+            **({"num_predict": num_predict} if num_predict is not None else {}),
             **({"num_gpu": 0} if cpu_only else {}),
         },
         "messages": [{
             "role": "user",
-            "content": PROMPT,
+            "content": prompt,
             "images": [base64.b64encode(png).decode("ascii")],
         }],
     }
@@ -96,6 +128,7 @@ def query_ollama(png: bytes, *, model: str, url: str, cpu_only: bool,
         "total_duration_seconds": result.get("total_duration", 0) / 1e9,
         "load_duration_seconds": result.get("load_duration", 0) / 1e9,
         "eval_count": result.get("eval_count"),
+        "done_reason": result.get("done_reason"),
         "eval_duration_seconds": result.get("eval_duration", 0) / 1e9,
     }
 
@@ -113,11 +146,28 @@ def main() -> None:
     parser.add_argument("--allow-gpu", action="store_true",
                         help="Default is CPU-only via num_gpu=0")
     parser.add_argument("--timeout", type=int, default=1200)
+    parser.add_argument("--mode", choices=("full", "targeted"), default="full")
+    parser.add_argument("--candidate", action="append", default=None,
+                        help="Candidate to classify; repeat as needed in targeted mode")
+    parser.add_argument("--num-ctx", type=int, default=None)
+    parser.add_argument("--num-predict", type=int, default=None)
     args = parser.parse_args()
     if not (72 <= args.dpi <= 200):
         parser.error("--dpi must be between 72 and 200")
     if args.runs < 1:
         parser.error("--runs must be positive")
+    if args.num_ctx is not None and args.num_ctx < 1024:
+        parser.error("--num-ctx must be at least 1024")
+    if args.num_predict is not None and args.num_predict < 1:
+        parser.error("--num-predict must be positive")
+    if args.candidate and args.mode != "targeted":
+        parser.error("--candidate requires --mode targeted")
+    candidates = tuple(args.candidate or DEFAULT_CANDIDATES.get(args.page, ()))
+    if args.mode == "targeted" and not candidates:
+        parser.error("No candidates for this page; supply --candidate one or more times")
+    prompt = targeted_prompt(candidates) if args.mode == "targeted" else PROMPT
+    context = args.num_ctx or (8192 if args.mode == "targeted" else 4096)
+    predict = args.num_predict or (512 if args.mode == "targeted" else None)
     password = os.getenv("NEXTCLOUD_APP_PASSWORD") or getpass.getpass(
         "Nextcloud-App-Passwort: "
     )
@@ -125,13 +175,15 @@ def main() -> None:
                            args.pdf_path)
     png = render_page(raw, args.page, args.dpi)
     print(f"PDF-Seite {args.page}, PNG {len(png)} Bytes, "
-          f"Modell {args.model}, CPU-only: {not args.allow_gpu}", flush=True)
+          f"Modell {args.model}, CPU-only: {not args.allow_gpu}, "
+          f"Modus: {args.mode}, Kontext: {context}, max. Ausgabe: {predict}", flush=True)
     for i in range(1, args.runs + 1):
         start = time.perf_counter()
         try:
             result = query_ollama(
                 png, model=args.model, url=args.ollama_url,
-                cpu_only=not args.allow_gpu, timeout=args.timeout
+                cpu_only=not args.allow_gpu, timeout=args.timeout,
+                prompt=prompt, num_ctx=context, num_predict=predict
             )
         except (HTTPError, URLError, TimeoutError) as exc:
             raise SystemExit(f"Ollama request failed: {exc}") from exc

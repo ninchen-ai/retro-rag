@@ -61,8 +61,9 @@ def align_page_headings(text: str, headings: Sequence[ReviewHeading]) -> list[He
             one = _normalized(stripped[i])
             if one in targets:
                 occurrences.append((i, 1))
-            if i + 1 < len(lines):
+            if i + 1 < len(lines) and stripped[i] and stripped[i + 1]:
                 two = _normalized(stripped[i] + " " + stripped[i + 1])
+                # Avoid a second identical hit spanning a blank line.
                 if two in targets:
                     occurrences.append((i, 2))
         occurrences = list(dict.fromkeys(occurrences))

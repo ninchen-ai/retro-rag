@@ -38,9 +38,9 @@ class HeadingCandidateTests(unittest.TestCase):
         self.assertEqual(hits[0].level, 2)
 
     def test_table_columns_and_clock_label_ignored(self):
-        sample = ("5 clocks              4 clocks              12 clocks\\n"
-                  "9 R-W-D'0       SBA_ENABLE       Description\\n"
-                  "66 MHz Clock\\n")
+        sample = ("5 clocks              4 clocks              12 clocks\n"
+                  "9 R-W-D'0       SBA_ENABLE       Description\n"
+                  "66 MHz Clock\n")
         self.assertEqual(detect_heading_lines(sample, 26), [])
 
     def test_main_chapters_must_be_consecutive(self):
@@ -65,8 +65,8 @@ class HeadingCandidateTests(unittest.TestCase):
     def test_real_chapter_six_kept(self):
         first = HeadingCandidate(113, 1, "5 Appendix B: Workstation Programming", "fixture", "candidate")
         chapter = detect_heading_lines(
-            "AGP3.0 Interface Specification\\nRev. 1.0\\n"
-            "6 Appendix C: Glossary of Terms\\n", 143
+            "AGP3.0 Interface Specification\nRev. 1.0\n"
+            "6 Appendix C: Glossary of Terms\n", 143
         )
         self.assertEqual([c.heading for c in chapter], ["6 Appendix C: Glossary of Terms"])
         kept = filter_main_chapter_sequence([

@@ -22,7 +22,7 @@ class HeadingAlignment:
     pdf_page: int
     heading: str
     source: str
-    status: str  # MATCHED / AMBIGUOUS / UNMATCHED
+    status: str  # MATCHED / MATCHED_COMPACT / AMBIGUOUS / UNMATCHED
     start_line: int | None  # 0-based, in get_text('text', sort=True)
     line_count: int
     extracted_text: str | None
@@ -45,6 +45,11 @@ def _targets(candidate: ReviewHeading) -> tuple[str, ...]:
     return tuple(dict.fromkeys(targets))
 
 
+def _compact(text: str) -> str:
+    """Ignore spacing artifacts only for a secondary, review-required comparison."""
+    return _WHITESPACE.sub("", text).casefold()
+
+
 def align_page_headings(text: str, headings: Sequence[ReviewHeading]) -> list[HeadingAlignment]:
     """Locate each candidate in one original page's text.
 
@@ -56,21 +61,32 @@ def align_page_headings(text: str, headings: Sequence[ReviewHeading]) -> list[He
     result: list[HeadingAlignment] = []
     for heading in headings:
         targets = _targets(heading)
-        occurrences: list[tuple[int, int]] = []
+        # Prefer exact whitespace-normalized alignment. A spacing-free
+        # comparison handles broken PDF glyph positioning (VOH / V OH,
+        # SimulationTechniques / Simulation Techniques), but requires review.
+        strict: list[tuple[int, int]] = []
+        compact: list[tuple[int, int]] = []
         for i in range(len(lines)):
-            one = _normalized(stripped[i])
-            if one in targets:
-                occurrences.append((i, 1))
+            variants = [(i, 1, stripped[i])]
             if i + 1 < len(lines) and stripped[i] and stripped[i + 1]:
-                two = _normalized(stripped[i] + " " + stripped[i + 1])
-                # Avoid a second identical hit spanning a blank line.
-                if two in targets:
-                    occurrences.append((i, 2))
-        occurrences = list(dict.fromkeys(occurrences))
+                variants.append((i, 2, stripped[i] + " " + stripped[i + 1]))
+            for index, count, candidate_text in variants:
+                normalized = _normalized(candidate_text)
+                if normalized in targets:
+                    strict.append((index, count))
+                elif any(_compact(candidate_text) == _compact(target)
+                         for target in targets):
+                    compact.append((index, count))
+        exact = list(dict.fromkeys(strict))
+        fallback = list(dict.fromkeys(compact))
+        # A second possible occurrence is still ambiguous, even if one
+        # occurrence has cleaner spacing; never silently select one.
+        occurrences = list(dict.fromkeys(exact + fallback))
         if len(occurrences) == 1:
             i, count = occurrences[0]
             result.append(HeadingAlignment(
-                heading.pdf_page, heading.heading, heading.source, "MATCHED",
+                heading.pdf_page, heading.heading, heading.source,
+                "MATCHED" if (i, count) in exact else "MATCHED_COMPACT",
                 i, count, "".join(lines[i:i + count]),
             ))
         else:

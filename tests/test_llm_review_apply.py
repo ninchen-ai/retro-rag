@@ -3,6 +3,7 @@ import unittest
 
 from llm_import.review_apply import execute_review_package
 from llm_import.review_package import plan_review_package
+from llm_import.review_write_transport import ReviewUploadConflictError
 
 
 class FakeTransport:
@@ -233,7 +234,34 @@ class TestReviewApply(unittest.TestCase):
             sum(x["status"] == "SKIPPED" for x in result["results"]),
             3,
         )
+    def test_http_412_conflict_stops_package(self):
+        transport = FakeTransport()
 
+        def conflict_upload(path, content):
+            raise ReviewUploadConflictError("HTTP 412")
+
+        transport.upload = conflict_upload
+
+        result = execute_review_package(
+            self.package,
+            transport=transport,
+        )
+
+        self.assertEqual(result["status"], "FAILED")
+        self.assertEqual(
+            sum(
+                item["status"] == "FAILED"
+                for item in result["results"]
+            ),
+            1,
+        )
+        self.assertEqual(
+            sum(
+                item["status"] == "SKIPPED"
+                for item in result["results"]
+            ),
+            3,
+        )
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,6 +14,8 @@ WebDAV-Schreiboperationen.
 
 from llm_import.review_transport import NextcloudReviewTransport
 
+class ReviewUploadConflictError(RuntimeError):
+    """Eine Zieldatei existiert bereits oder wurde verändert."""
 
 class NextcloudReviewWriteTransport(NextcloudReviewTransport):
 
@@ -78,6 +80,11 @@ class NextcloudReviewWriteTransport(NextcloudReviewTransport):
             raise RuntimeError("Ungültige PUT-Antwort")
 
         status = result.get("status")
+
+        if status == "CONFLICT":
+            raise ReviewUploadConflictError(
+                f"Review-Datei bereits vorhanden: {path}"
+            )
 
         if status != "CREATED":
             raise RuntimeError(

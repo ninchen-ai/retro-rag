@@ -8,6 +8,7 @@ from llm_import.review_package import plan_review_package
 from llm_import.review_orchestrator import build_review_dry_run
 from llm_import.review_executor import validate_execution_plan
 from llm_import.review_resume import decide_review_upload
+from llm_import.review_write_transport import ReviewUploadConflictError
 
 
 def execute_review_package(import_result: dict, *, transport) -> dict:
@@ -100,7 +101,11 @@ def execute_review_package(import_result: dict, *, transport) -> dict:
                         status = transport.upload(
                             path,
                             files[path],
-                        )
+                    )
+                    except ReviewUploadConflictError:
+                        # HTTP 412: bestätigter Konflikt.
+                        # Nicht als erfolgreichen Upload interpretieren.
+                        raise
                     except Exception:
                         # Ergebnis des PUT ist unklar.
                         # Ein erneutes GET kann den Erfolg bestätigen.

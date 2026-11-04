@@ -22,7 +22,7 @@ class HeadingAlignment:
     pdf_page: int
     heading: str
     source: str
-    status: str  # MATCHED / MATCHED_COMPACT / AMBIGUOUS / UNMATCHED
+    status: str  # MATCHED / MATCHED_COMPACT / MATCHED_CHAPTER_ANCHOR / AMBIGUOUS / UNMATCHED
     start_line: int | None  # 0-based, in get_text('text', sort=True)
     line_count: int
     extracted_text: str | None
@@ -48,6 +48,32 @@ def _targets(candidate: ReviewHeading) -> tuple[str, ...]:
 def _compact(text: str) -> str:
     """Ignore spacing artifacts only for a secondary, review-required comparison."""
     return _WHITESPACE.sub("", text).casefold()
+
+
+def _separated_chapter_anchors(
+    stripped: list[str], heading: ReviewHeading
+) -> list[int]:
+    """Find a standalone chapter label backed by its nearby title.
+
+    A title without its label, or a label mentioned in prose, is insufficient.
+    Restrict to two following nonblank lines to avoid jumping across body text.
+    """
+    if not heading.source.startswith("separated chapter"):
+        return []
+    label, separator, title = heading.heading.partition(": ")
+    if not separator:
+        return []
+    anchors: list[int] = []
+    for index, line in enumerate(stripped):
+        if _normalized(line) != _normalized(label):
+            continue
+        following = [
+            next_line for next_line in stripped[index + 1:index + 4]
+            if next_line
+        ][:2]
+        if any(_compact(next_line) == _compact(title) for next_line in following):
+            anchors.append(index)
+    return anchors
 
 
 def align_page_headings(text: str, headings: Sequence[ReviewHeading]) -> list[HeadingAlignment]:
@@ -82,6 +108,23 @@ def align_page_headings(text: str, headings: Sequence[ReviewHeading]) -> list[He
         # A second possible occurrence is still ambiguous, even if one
         # occurrence has cleaner spacing; never silently select one.
         occurrences = list(dict.fromkeys(exact + fallback))
+        if not occurrences:
+            # Layout verified the composite chapter heading, but some PDFs
+            # extract the chapter label and title with intervening artifacts.
+            chapter_anchors = _separated_chapter_anchors(stripped, heading)
+            if len(chapter_anchors) == 1:
+                index = chapter_anchors[0]
+                result.append(HeadingAlignment(
+                    heading.pdf_page, heading.heading, heading.source,
+                    "MATCHED_CHAPTER_ANCHOR", index, 1, lines[index],
+                ))
+                continue
+            if len(chapter_anchors) > 1:
+                result.append(HeadingAlignment(
+                    heading.pdf_page, heading.heading, heading.source,
+                    "AMBIGUOUS", None, 0, None,
+                ))
+                continue
         if len(occurrences) == 1:
             i, count = occurrences[0]
             result.append(HeadingAlignment(

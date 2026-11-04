@@ -27,6 +27,19 @@ class LayoutHeadingTests(unittest.TestCase):
         raw=doc.tobytes();doc.close()
         self.assertEqual([h.heading for h in scan_layout_document(raw)], ["3.2 Transfer Mode Operations"])
 
+    def test_numbered_register_subsection_is_not_discarded(self):
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.insert_text((54, 60), "5.8.4 AGPSTAT: AGP STATUS REGISTER", fontsize=14.2, fontname="hebo")
+        page.insert_text((54, 90), "Register fields are described here.", fontsize=11, fontname="helv")
+        raw = doc.tobytes()
+        doc.close()
+        found = scan_layout_document(raw)
+        self.assertEqual(
+            [item.heading for item in found],
+            ["5.8.4 AGPSTAT: AGP STATUS REGISTER"],
+        )
+
     def test_register_and_contents_not_headings(self):
         doc=pymupdf.open()
         p=doc.new_page()

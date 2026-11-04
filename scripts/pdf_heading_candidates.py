@@ -39,17 +39,24 @@ def detect_heading_lines(text: str, page_number: int, *, max_lines: int = 14) ->
     for index, line in enumerate(lines[:max_lines]):
         if _LEADERS.search(line) or _LIST_OR_TABLE.match(line):
             continue
+        # Text extracted from multi-column tables frequently contains wide gaps.
+        if re.search(r"\\s{2,}", line):
+            continue
         match = _SUB.fullmatch(line) or _MAIN.fullmatch(line)
         if match is None:
             continue
         title = match.group("title").strip()
         number = match.group("number")
         # Restrict to headings with a letter-based title; still only a candidate.
-        if len(title.split()) < 2:
+        if len(title.split()) < 2 or len(title) > 100:
             continue
         if title.endswith((".", ";", ":")):
             continue
         level = 1 if "." not in number else number.count(".") + 1
+        # Chapter numbers in these engineering specifications are small;
+        # e.g. "66 MHz Clock" is not chapter 66.
+        if level == 1 and int(number) > 20:
+            continue
         candidates.append(HeadingCandidate(
             pdf_page=page_number,
             level=level,
@@ -58,6 +65,23 @@ def detect_heading_lines(text: str, page_number: int, *, max_lines: int = 14) ->
             confidence="candidate",
         ))
     return candidates
+
+
+def filter_main_chapter_sequence(candidates: list[HeadingCandidate]) -> list[HeadingCandidate]:
+    """Retain only ascending, consecutive main chapters across PDF pages.
+
+    Does not certify subsection candidates; human review remains necessary.
+    """
+    next_main = 1
+    accepted: list[HeadingCandidate] = []
+    for item in candidates:
+        if item.level == 1:
+            number = int(item.heading.split(" ", 1)[0])
+            if number != next_main:
+                continue
+            next_main += 1
+        accepted.append(item)
+    return accepted
 
 
 def scan_document(raw: bytes, *, max_lines: int = 14) -> list[HeadingCandidate]:
@@ -72,4 +96,4 @@ def scan_document(raw: bytes, *, max_lines: int = 14) -> list[HeadingCandidate]:
                 page_number,
                 max_lines=max_lines,
             ))
-        return found
+        return filter_main_chapter_sequence(found)

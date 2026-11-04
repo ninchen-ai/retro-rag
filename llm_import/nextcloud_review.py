@@ -49,7 +49,11 @@ def validate_review_file_path(path: str) -> str:
     return path
 
 
-def validate_review_directory_path(path: str) -> str:
+def validate_review_directory_path(
+    path: str,
+    *,
+    allow_root: bool = False,
+) -> str:
     """Validiert ein Unterverzeichnis des Review-Bereichs."""
 
     if not isinstance(path, str):
@@ -64,6 +68,9 @@ def validate_review_directory_path(path: str) -> str:
     # Nur den einen obligatorischen abschließenden Slash entfernen.
     # Weitere Slashes müssen als ungültig erkannt werden.
     relative = path[len(REVIEW_ROOT):-1]
+
+    if allow_root and path == REVIEW_ROOT:
+        return path
 
     _validate_review_components(relative)
 
@@ -335,12 +342,21 @@ def verify_review_directory(
 ) -> bool:
     """Prüft per PROPFIND, ob ein Review-Verzeichnis existiert."""
 
-    probe = build_review_mkcol_request(
+    # PROPFIND darf auch das bestehende Review-Basisverzeichnis prüfen.
+    # MKCOL darf es dagegen nicht neu anlegen.
+    validate_review_directory_path(path, allow_root=True)
+
+    # Vorhandenen PUT-Builder für die sichere URL-Erstellung
+    # und Authentifizierung wiederverwenden.
+    probe = build_review_put_request(
         base_url=base_url,
         user=user,
         password=password,
-        path=path,
+        path=path + "__validation__.md",
+        content="# validation",
     )
+
+    directory_url = probe.full_url.rsplit("/", 1)[0] + "/"
 
     body = (
         b'<?xml version="1.0" encoding="utf-8"?>'
@@ -350,7 +366,7 @@ def verify_review_directory(
     )
 
     request = Request(
-        url=probe.full_url,
+        url=directory_url,
         data=body,
         method="PROPFIND",
         headers={
@@ -403,7 +419,7 @@ def verify_review_directory(
     if not href:
         raise RuntimeError("PROPFIND-Antwort ohne href")
 
-    expected = urlsplit(probe.full_url)
+    expected = urlsplit(directory_url)
 
     returned = urlsplit(href)
 

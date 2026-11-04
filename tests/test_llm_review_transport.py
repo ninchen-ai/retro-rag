@@ -1,8 +1,9 @@
 
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from llm_import.review_transport import NextcloudReviewTransport
+from llm_import.nextcloud_review import verify_review_directory
 
 
 class TestReviewTransport(unittest.TestCase):
@@ -48,6 +49,46 @@ class TestReviewTransport(unittest.TestCase):
                 b"# GPU",
             )
 
+    @patch("llm_import.nextcloud_review.build_opener")
+    def test_propfind_allows_review_root(self, mock_opener):
+        root = "Retro-Computing/Import/review/"
+
+        response = Mock()
+        response.status = 207
+        response.read.return_value = (
+            b'<?xml version="1.0" encoding="utf-8"?>'
+            b'<d:multistatus xmlns:d="DAV:">'
+            b'<d:response>'
+            b'<d:href>'
+            b'/remote.php/dav/files/nina/'
+            b'Retro-Computing/Import/review/'
+            b'</d:href>'
+            b'<d:propstat>'
+            b'<d:prop>'
+            b'<d:resourcetype><d:collection/></d:resourcetype>'
+            b'</d:prop>'
+            b'<d:status>HTTP/1.1 200 OK</d:status>'
+            b'</d:propstat>'
+            b'</d:response>'
+            b'</d:multistatus>'
+        )
+
+        opener = mock_opener.return_value
+        opener.open.return_value.__enter__.return_value = response
+
+        result = verify_review_directory(
+            base_url="http://127.0.0.1:8080",
+            user="nina",
+            password="test",
+            path=root,
+        )
+
+        self.assertTrue(result)
+
+        request = opener.open.call_args.args[0]
+
+        self.assertEqual(request.get_method(), "PROPFIND")
+        self.assertTrue(request.full_url.endswith(root))
 
 if __name__ == "__main__":
     unittest.main()

@@ -40,6 +40,39 @@ class LayoutHeadingTests(unittest.TestCase):
             ["5.8.4 AGPSTAT: AGP STATUS REGISTER"],
         )
 
+    def test_single_word_numbered_subsections(self):
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.insert_text((54, 80), "3 AGP3.0 Physical Layer Specification", fontsize=22, fontname="hebo")
+        page.insert_text((54, 120), "3.1 Overview", fontsize=16, fontname="hebo")
+        page.insert_text((54, 160), "3.1.1 Introduction", fontsize=14, fontname="hebo")
+        page.insert_text((54, 195), "Normal technical explanation follows.", fontsize=11, fontname="helv")
+        raw = doc.tobytes()
+        doc.close()
+        found = scan_layout_document(raw)
+        self.assertEqual(
+            [heading.heading for heading in found],
+            [
+                "3 AGP3.0 Physical Layer Specification",
+                "3.1 Overview",
+                "3.1.1 Introduction",
+            ],
+        )
+        self.assertTrue(all(h.confidence == "candidate" for h in found))
+
+    def test_short_unbolded_or_measurement_lines_not_promoted(self):
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.insert_text((54, 70), "3.1 Overview", fontsize=11, fontname="helv")
+        page.insert_text((54, 110), "4.1 Specifications", fontsize=16, fontname="hebo")
+        page.insert_text((54, 145), "6.0 ns 5", fontsize=11, fontname="helv")
+        raw = doc.tobytes()
+        doc.close()
+        self.assertEqual(
+            [h.heading for h in scan_layout_document(raw)],
+            ["4.1 Specifications"],
+        )
+
     def test_register_and_contents_not_headings(self):
         doc=pymupdf.open()
         p=doc.new_page()

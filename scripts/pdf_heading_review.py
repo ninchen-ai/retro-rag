@@ -16,6 +16,7 @@ from scripts.pdf_heading_styles import scan_alternative_styles
 _DOTTED = re.compile(r"^([1-9][0-9]?)\.\s+")
 _SEPARATED = re.compile(r"^Chapter\s+([1-9][0-9]?):\s+", re.I)
 _NUMBERED = re.compile(r"^([1-9][0-9]?(?:\.\d+){0,3})\s+")
+_MEASUREMENT_ROW = re.compile(r"^\d+(?:\.\d+)?\s+(?:ns|ps|ms|mhz|khz|mv|v)\s+\d+$", re.I)
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,9 @@ def build_heading_review(raw: bytes) -> ReviewReport:
     # Retain source + evidence, do not merge same-page candidate titles blindly.
     unique: dict[tuple[int, int, str], ReviewHeading] = {}
     for c in chosen:
+        # Engineering timing tables sometimes resemble section numbers.
+        if _MEASUREMENT_ROW.fullmatch(c.heading):
+            continue
         m = _NUMBERED.match(c.heading)
         if style == "dotted" and c.level == 1:
             m = _DOTTED.match(c.heading)

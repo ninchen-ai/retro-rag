@@ -47,6 +47,38 @@ class HeadingAlignmentTests(unittest.TestCase):
         )[0]
         self.assertEqual(matched.status, "MATCHED")
 
+    def test_subscript_spacing_artifact(self):
+        result = align_page_headings(
+            "3.6.6.2 Signal swing (VOH) Accuracy\\n",
+            [candidate("3.6.6.2 Signal swing (V OH ) Accuracy")],
+        )[0]
+        self.assertEqual(result.status, "MATCHED_COMPACT")
+        self.assertEqual(result.extracted_text, "3.6.6.2 Signal swing (VOH) Accuracy\\n")
+
+    def test_collapsed_word_spacing(self):
+        result = align_page_headings(
+            "SimulationTechniques\\n",
+            [candidate("Simulation Techniques")],
+        )[0]
+        self.assertEqual((result.status, result.line_count),
+                         ("MATCHED_COMPACT", 1))
+
+    def test_separated_chapter_collapsed_title(self):
+        result = align_page_headings(
+            "Chapter 1\\nAGPElectricalDesignConsiderations\\n",
+            [candidate("Chapter 1: AGP Electrical Design Considerations",
+                       "separated chapter label and bold title")],
+        )[0]
+        self.assertEqual((result.status, result.line_count),
+                         ("MATCHED_COMPACT", 2))
+
+    def test_compact_multiple_occurrences_remain_ambiguous(self):
+        result = align_page_headings(
+            "SimulationTechniques\\nSimulation Techniques\\n",
+            [candidate("Simulation Techniques")],
+        )[0]
+        self.assertEqual(result.status, "AMBIGUOUS")
+
     def test_missing_and_duplicate_are_not_assumed(self):
         self.assertEqual(
             align_page_headings("Other contents\n", [candidate("1 Overview")])[0].status,

@@ -55,7 +55,11 @@ def detect_heading_lines(text: str, page_number: int, *, max_lines: int = 14) ->
         level = 1 if "." not in number else number.count(".") + 1
         # Chapter numbers in these engineering specifications are small;
         # e.g. "66 MHz Clock" is not chapter 66.
-        if level == 1 and int(number) > 20:
+        if level == 1 and (int(number) > 20 or len(title) > 75):
+            continue
+        # Register fields often begin with an integer and an all-caps field label.
+        # They are not section titles, even when extracted without column gaps.
+        if level == 1 and re.match(r"^[A-Z][A-Z0-9_]{1,15}:", title):
             continue
         candidates.append(HeadingCandidate(
             pdf_page=page_number,

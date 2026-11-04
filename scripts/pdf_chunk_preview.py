@@ -78,7 +78,12 @@ def preview_section_chunks(raw: bytes, max_chars: int = DEFAULT_MAX_CHARS) -> Ch
                 end = starts[idx + 1] if idx + 1 < len(starts) else len(lines)
                 part = "".join(lines[start:end])
                 context = " / ".join(hierarchy) if hierarchy else None
-                for piece in split_preserving_text(part, max_chars):
+                # split_preserving_text intentionally skips whitespace-only input.
+                # A lossless preview must retain such regions as well.
+                pieces = ([part[i:i + max_chars] for i in range(0, len(part), max_chars)]
+                          if part and not part.strip()
+                          else split_preserving_text(part, max_chars))
+                for piece in pieces:
                     chunks.append(PdfChunk(number, number, context, piece))
                     produced.append(piece)
             if "".join(produced) != text:

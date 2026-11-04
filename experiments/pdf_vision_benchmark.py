@@ -118,12 +118,20 @@ def query_ollama(png: bytes, *, model: str, url: str, cpu_only: bool,
     )
     with urlopen(request, timeout=timeout) as response:
         result = json.load(response)
-    message = result.get("message", {}).get("content", "")
+    message_obj = result.get("message") or {}
+    message = message_obj.get("content") or ""
+    thinking = message_obj.get("thinking") or ""
     try:
         parsed = json.loads(message)
     except (json.JSONDecodeError, TypeError):
         parsed = {"unparsed_response": message}
     return {
+        "response_diagnostics": {
+            "message_fields": sorted(message_obj.keys()),
+            "content_chars": len(message),
+            "thinking_chars": len(thinking),
+            "empty_content": not bool(message.strip()),
+        },
         "response": parsed,
         "total_duration_seconds": result.get("total_duration", 0) / 1e9,
         "load_duration_seconds": result.get("load_duration", 0) / 1e9,

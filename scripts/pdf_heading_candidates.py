@@ -40,7 +40,7 @@ def detect_heading_lines(text: str, page_number: int, *, max_lines: int = 14) ->
         if _LEADERS.search(line) or _LIST_OR_TABLE.match(line):
             continue
         # Text extracted from multi-column tables frequently contains wide gaps.
-        if re.search(r"\\s{2,}", line):
+        if re.search(r"\s{2,}", line):
             continue
         match = _SUB.fullmatch(line) or _MAIN.fullmatch(line)
         if match is None:

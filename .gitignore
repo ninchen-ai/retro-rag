@@ -29,3 +29,6 @@ backups/
 
 # Betriebssystem
 .DS_Store
+
+# Lokal generierte LLM-Importergebnisse
+/data/review-results/

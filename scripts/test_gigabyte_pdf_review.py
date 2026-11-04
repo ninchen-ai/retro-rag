@@ -2,6 +2,10 @@ import getpass
 import os
 import re
 import json
+import argparse
+
+from pathlib import Path
+from hashlib import sha256
 
 from llm_import.model_context import find_shared_board_layout
 from llm_import.video_evidence import suggest_video_evidence
@@ -17,6 +21,18 @@ from scripts.import_llm import (
 )
 
 from llm_import.review_package import plan_review_package
+
+parser = argparse.ArgumentParser(
+    description="Gigabyte-PDF analysieren oder gespeichertes Ergebnis verwenden"
+)
+
+parser.add_argument(
+    "--analyze",
+    action="store_true",
+    help="LLM-Analyse ausführen, falls kein gespeichertes Ergebnis existiert",
+)
+
+args = parser.parse_args()
 
 url = "http://127.0.0.1:8080"
 user = "nina"
@@ -103,12 +119,94 @@ for index, line in enumerate(lines):
         ):
             print(f"{position + 1}: {lines[position]}")
 
-result = process_multi_model_document(
-    source_bytes=pdf_bytes,
-    filename=filename,
-    model="qwen3.5:4b",
-    ollama_url=DEFAULT_URL,
+
+source_hash = sha256(pdf_bytes).hexdigest()
+
+output_dir = Path("data/review-results")
+output_dir.mkdir(parents=True, exist_ok=True)
+
+output_file = output_dir / f"{source_hash[:16]}.json"
+
+if output_file.exists():
+    print(f"\nLade vorhandenes Importergebnis: {output_file}")
+
+    with output_file.open("r", encoding="utf-8") as handle:
+        result = json.load(handle)
+
+else:
+    if not args.analyze:
+        raise SystemExit(
+            "Kein gespeichertes Importergebnis vorhanden.\n"
+            "Für eine einmalige Analyse --analyze verwenden."
+        )
+
+    print("\nKein Importergebnis vorhanden.")
+    print("Starte LLM-Analyse mit qwen3.5:4b ...")
+
+    result = process_multi_model_document(
+        source_bytes=pdf_bytes,
+        filename=filename,
+        model="qwen3.5:4b",
+        ollama_url=DEFAULT_URL,
+    )
+
+    # Erst validieren, dann lokal speichern.
+    plan_review_package(result)
+
+    result_hashes = {
+        item["source"]["sha256"]
+        for item in result["results"]
+    }
+
+    if result_hashes != {source_hash}:
+        raise ValueError(
+        "Importergebnis passt nicht zum heruntergeladenen PDF"
+    )
+
+    with output_file.open("x", encoding="utf-8") as handle:
+        json.dump(
+            result,
+            handle,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        handle.write("\n")
+
+    print(f"Importergebnis gespeichert: {output_file}")
+
+# Auch geladene Ergebnisse müssen gültige Review-Pakete sein.
+plan_review_package(result)
+
+print("Quell-SHA-256:", source_hash)
+
+# Importergebnis lokal und nachvollziehbar archivieren.
+source_hash = sha256(pdf_bytes).hexdigest()
+
+output_dir = Path("data/review-results")
+output_dir.mkdir(parents=True, exist_ok=True)
+
+output_file = output_dir / f"{source_hash[:16]}.json"
+
+if output_file.exists():
+    raise FileExistsError(
+        f"Importergebnis bereits vorhanden: {output_file}"
+    )
+
+serialized = json.dumps(
+    result,
+    ensure_ascii=False,
+    indent=2,
+    sort_keys=True,
 )
+
+# Exklusives Erstellen verhindert unbeabsichtigtes Überschreiben.
+with output_file.open("x", encoding="utf-8") as handle:
+    handle.write(serialized)
+    handle.write("\n")
+
+print("\nImportergebnis gesichert:", output_file)
+print("Quell-SHA-256:", source_hash)
 
 print("\n===== NEXTCLOUD REVIEW-PAKET: DRY-RUN =====")
 

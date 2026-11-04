@@ -158,5 +158,82 @@ class TestReviewApply(unittest.TestCase):
             3,
         )
 
+    def test_mkcol_failure_prevents_uploads(self):
+        transport = FakeTransport()
+
+        def fail_directory(path):
+            raise RuntimeError("MKCOL fehlgeschlagen")
+
+        transport.create_directory = fail_directory
+
+        result = execute_review_package(
+            self.package,
+            transport=transport,
+        )
+
+        self.assertEqual(result["status"], "FAILED")
+        self.assertEqual(transport.upload_count, 0)
+        self.assertEqual(len(transport.files), 0)
+
+        self.assertEqual(
+            sum(x["status"] == "FAILED" for x in result["results"]),
+            1,
+        )
+
+    def test_put_success_with_wrong_content_fails(self):
+        transport = FakeTransport()
+
+        def upload_corrupted(path, content):
+            transport.upload_count += 1
+            transport.files[path] = b"# Falscher Inhalt"
+            return "CREATED"
+
+        transport.upload = upload_corrupted
+
+        result = execute_review_package(
+            self.package,
+            transport=transport,
+        )
+
+        self.assertEqual(result["status"], "FAILED")
+        self.assertEqual(transport.upload_count, 1)
+
+        self.assertEqual(
+            sum(x["status"] == "SKIPPED" for x in result["results"]),
+            3,
+        )
+
+    def test_put_and_followup_get_failure(self):
+        transport = FakeTransport()
+        original_read = transport.read
+        upload_attempted = False
+
+        def fail_upload(path, content):
+            nonlocal upload_attempted
+            upload_attempted = True
+            raise RuntimeError("PUT-Verbindung unterbrochen")
+
+        def read_with_failure(path):
+            if upload_attempted:
+                raise RuntimeError("GET-Nachprüfung fehlgeschlagen")
+            return original_read(path)
+
+        transport.upload = fail_upload
+        transport.read = read_with_failure
+
+        result = execute_review_package(
+            self.package,
+            transport=transport,
+        )
+
+        self.assertEqual(result["status"], "FAILED")
+        self.assertTrue(upload_attempted)
+
+        self.assertEqual(
+            sum(x["status"] == "SKIPPED" for x in result["results"]),
+            3,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

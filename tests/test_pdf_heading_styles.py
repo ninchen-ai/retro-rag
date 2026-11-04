@@ -29,6 +29,21 @@ class HeadingStyleTests(unittest.TestCase):
         self.assertIn("Chapter 1: AGP Electrical Design Considerations", headings)
         self.assertIn("AGP Electrical Requirements", headings)
 
+    def test_preface_chapter_previews_not_subsections(self):
+        doc = pymupdf.open()
+        intro = doc.new_page()
+        intro.insert_text((54, 100), "Chapter 1: AGP Electrical Design Considerations", fontsize=12, fontname="hebo")
+        intro.insert_text((54, 128), "Document Structure and Outline", fontsize=12, fontname="hebo")
+        chapter = doc.new_page()
+        chapter.insert_text((54, 140), "Chapter 1", fontsize=16, fontname="hebo")
+        chapter.insert_text((54, 174), "AGP Electrical Design Considerations", fontsize=14, fontname="hebo")
+        chapter.insert_text((54, 205), "AGP Electrical Requirements", fontsize=12, fontname="hebo")
+        raw = doc.tobytes()
+        doc.close()
+        hits = scan_alternative_styles(raw)
+        self.assertTrue(all(h.pdf_page >= 2 for h in hits))
+        self.assertIn("AGP Electrical Requirements", [h.heading for h in hits])
+
     def test_no_unnumbered_guess_without_separated_chapter(self):
         doc = pymupdf.open()
         page = doc.new_page()

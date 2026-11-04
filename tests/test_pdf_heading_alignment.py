@@ -32,6 +32,35 @@ class HeadingAlignmentTests(unittest.TestCase):
         )[0]
         self.assertEqual((result.status, result.start_line, result.line_count), ("MATCHED", 0, 2))
 
+    def test_chapter_label_with_intervening_pdf_artifact(self):
+        text = "Running header\nChapter 1\n\nAGPElectricalDesignConsiderations\nBody\n"
+        result = align_page_headings(
+            text,
+            [candidate("Chapter 1: AGP Electrical Design Considerations",
+                       "separated chapter label and bold title")],
+        )[0]
+        self.assertEqual((result.status, result.start_line, result.line_count),
+                         ("MATCHED_CHAPTER_ANCHOR", 1, 1))
+        self.assertEqual(result.extracted_text, "Chapter 1\n")
+
+    def test_chapter_reference_in_prose_not_an_anchor(self):
+        text = "Chapter 1 explains this topic.\nAGPElectricalDesignConsiderations\n"
+        result = align_page_headings(
+            text,
+            [candidate("Chapter 1: AGP Electrical Design Considerations",
+                       "separated chapter label and bold title")],
+        )[0]
+        self.assertEqual(result.status, "UNMATCHED")
+
+    def test_standalone_chapter_label_without_title_not_an_anchor(self):
+        text = "Chapter 1\nSome unrelated content\n"
+        result = align_page_headings(
+            text,
+            [candidate("Chapter 1: AGP Electrical Design Considerations",
+                       "separated chapter label and bold title")],
+        )[0]
+        self.assertEqual(result.status, "UNMATCHED")
+
     def test_blank_neighbor_must_not_double_count(self):
         text = "Header\n3.2 Transfer Mode Operations\n\nMore text\n"
         matched = align_page_headings(

@@ -13,7 +13,7 @@ import pymupdf
 
 from scripts.pdf_heading_candidates import HeadingCandidate
 
-_HEADING = re.compile(r"^(?P<number>[1-9]\d?(?:\.\d+){0,3})\s+(?P<title>[A-Za-z][^\n]{3,120})$")
+_HEADING = re.compile(r"^(?P<number>[1-9]\d?(?:\.\d+){0,3})\s+(?P<title>(?:[A-Za-z]|[1248]x\b)[^\n]{3,120})$")
 _LEADERS = re.compile(r"\.{3,}|…{2,}")
 _REGISTER = re.compile(r"^[A-Z][A-Z0-9_]{1,15}:")
 

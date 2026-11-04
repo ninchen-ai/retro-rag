@@ -98,6 +98,39 @@ class TestReviewWriteTransport(unittest.TestCase):
                 put=None,
             )
 
+    def test_upload_rejects_unsafe_paths(self):
+        invalid_paths = [
+            "../test.md",
+            "Retro-Computing/Import/test.md",
+            "Retro-Computing/Import/review/../test.md",
+            "Retro-Computing/Import/review/test.txt",
+            "Retro-Computing/Import/review/test//file.md",
+        ]
+
+        for path in invalid_paths:
+            with self.subTest(path=path):
+                with self.assertRaises(ValueError):
+                    self.transport.upload(path, b"# Test")
+
+        self.put.assert_not_called()
+
+    def test_mkcol_rejects_unsafe_paths(self):
+        invalid_paths = [
+            "../test/",
+            "Retro-Computing/Import/test/",
+            "Retro-Computing/Import/review/../test/",
+            "Retro-Computing/Import/review/test//",
+            "Retro-Computing/Import/review/test",
+            "Retro-Computing/Import/review/",
+        ]
+
+        for path in invalid_paths:
+            with self.subTest(path=path):
+                with self.assertRaises(ValueError):
+                    self.transport.create_directory(path)
+
+        self.mkcol.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

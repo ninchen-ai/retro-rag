@@ -1,3 +1,7 @@
+from llm_import.nextcloud_review import (
+    validate_review_file_path,
+    validate_review_directory_path,
+)
 
 """Schreibtransport für Review-Dateien.
 
@@ -37,6 +41,8 @@ class NextcloudReviewWriteTransport(NextcloudReviewTransport):
         self._put = put
 
     def create_directory(self, path):
+        validate_review_directory_path(path)
+
         result = self._mkcol(
             **self.connection,
             path=path,
@@ -55,6 +61,8 @@ class NextcloudReviewWriteTransport(NextcloudReviewTransport):
         return status
 
     def upload(self, path, content):
+        validate_review_file_path(path)
+
         if not isinstance(content, bytes):
             raise TypeError("Upload-Inhalt muss bytes sein")
 

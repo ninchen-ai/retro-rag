@@ -10,6 +10,65 @@ from xml.etree import ElementTree as ET
 REVIEW_ROOT = "Retro-Computing/Import/review/"
 
 
+def _validate_review_components(relative: str) -> None:
+    """Prüft Pfadbestandteile innerhalb des Review-Bereichs."""
+
+    if not relative:
+        raise ValueError("Leerer relativer Review-Pfad")
+
+    components = relative.split("/")
+
+    if any(
+        component in {"", ".", ".."}
+        or not component.isascii()
+        or not all(
+            char.isalnum() or char in "._-"
+            for char in component
+        )
+        for component in components
+    ):
+        raise ValueError("Unsichere Review-Pfadbestandteile")
+
+
+def validate_review_file_path(path: str) -> str:
+    """Validiert einen Markdown-Dateipfad."""
+
+    if not isinstance(path, str):
+        raise ValueError("Ungültiger Review-Dateipfad")
+
+    if not path.startswith(REVIEW_ROOT):
+        raise ValueError("Ziel liegt außerhalb des Review-Bereichs")
+
+    relative = path[len(REVIEW_ROOT):]
+
+    _validate_review_components(relative)
+
+    if not path.endswith(".md"):
+        raise ValueError("Nur Markdown-Dateien erlaubt")
+
+    return path
+
+
+def validate_review_directory_path(path: str) -> str:
+    """Validiert ein Unterverzeichnis des Review-Bereichs."""
+
+    if not isinstance(path, str):
+        raise ValueError("Ungültiger Review-Verzeichnispfad")
+
+    if not path.startswith(REVIEW_ROOT):
+        raise ValueError("Ziel liegt außerhalb des Review-Bereichs")
+
+    if not path.endswith("/"):
+        raise ValueError("Verzeichnispfad muss mit / enden")
+
+    # Nur den einen obligatorischen abschließenden Slash entfernen.
+    # Weitere Slashes müssen als ungültig erkannt werden.
+    relative = path[len(REVIEW_ROOT):-1]
+
+    _validate_review_components(relative)
+
+    return path
+
 def build_review_put_request(
     *,
     base_url: str,
@@ -183,8 +242,7 @@ def build_review_mkcol_request(
 ) -> Request:
     """Erstellt eine sichere MKCOL-Anfrage ohne Netzwerkzugriff."""
 
-    if not isinstance(path, str) or not path.endswith("/"):
-        raise ValueError("MKCOL benötigt einen Verzeichnispfad")
+    validate_review_directory_path(path)
 
     # Wir verwenden den bestehenden PUT-Builder zur Validierung
     # der Verbindungsparameter und des geschützten Zielbereichs.

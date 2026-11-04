@@ -94,7 +94,15 @@ def scan_alternative_styles(raw: bytes) -> list[HeadingCandidate]:
         # separated 'Chapter N' labels, not for numbered AGP-style documents.
         separated = any(c.evidence.startswith("separated chapter") for c in output)
         if separated:
+            first_chapter_page = min(
+                c.pdf_page for c in output
+                if c.evidence.startswith("separated chapter")
+            )
             for page_number, rows in enumerate(pages, 1):
+                # Preface / chapter previews precede the first actual chapter;
+                # they must not become subsection anchors for Chapter 1.
+                if page_number < first_chapter_page:
+                    continue
                 opening = " ".join(row.text.lower() for row in rows[:5])
                 if "table of contents" in opening or "list of figures" in opening or "list of tables" in opening:
                     continue
@@ -108,6 +116,7 @@ def scan_alternative_styles(raw: bytes) -> list[HeadingCandidate]:
                         or _EXCLUDE.match(title)
                         or _PAGE_NUMBER.fullmatch(title)
                         or _CHAPTER_LABEL.fullmatch(title)
+                        or re.match(r"^(?:Chapter\\s+\\d+\\s*:|Preface\\s*:)", title, re.I)
                         or re.match(r"^\d+(?:\.\d+)*[.\s]", title)
                         or title.endswith((".", ";", ":"))
                     ):

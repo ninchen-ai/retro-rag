@@ -80,19 +80,6 @@ class TestNextcloudReview(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_review_put_request(**args)
 
-    @patch("llm_import.nextcloud_review.urlopen")
-    def test_successful_upload(self, mock_build_opener):
-        response = Mock()
-        response.status = 201
-
-        opener = mock_build_opener.return_value
-        opener.open.return_value.__enter__.return_value = response
-
-        result = upload_review_file(**self.args)
-
-        self.assertEqual(result["status"], "CREATED")
-        self.assertEqual(result["http_status"], 201)
-
     @patch("llm_import.nextcloud_review.build_opener")
     def test_successful_upload(self, mock_build_opener):
         response = Mock()

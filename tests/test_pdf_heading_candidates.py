@@ -1,7 +1,7 @@
 """Candidate detection tests, no database and no Nextcloud needed."""
 import unittest
 
-from scripts.pdf_heading_candidates import detect_heading_lines
+from scripts.pdf_heading_candidates import detect_heading_lines, filter_main_chapter_sequence, HeadingCandidate
 
 
 class HeadingCandidateTests(unittest.TestCase):
@@ -36,6 +36,26 @@ class HeadingCandidateTests(unittest.TestCase):
                   "The following documents should be used ...")
         hits = detect_heading_lines(sample, 12)
         self.assertEqual(hits[0].level, 2)
+
+    def test_table_columns_and_clock_label_ignored(self):
+        sample = ("5 clocks              4 clocks              12 clocks\\n"
+                  "9 R-W-D'0       SBA_ENABLE       Description\\n"
+                  "66 MHz Clock\\n")
+        self.assertEqual(detect_heading_lines(sample, 26), [])
+
+    def test_main_chapters_must_be_consecutive(self):
+        def candidate(page, text):
+            return HeadingCandidate(page, 1, text, "fixture", "candidate")
+        samples = [
+            candidate(11, "1 Introduction and Overview"),
+            candidate(26, "5 clocks are required"),
+            candidate(42, "1 All other codes Reserved"),
+            candidate(16, "2 Description of New Features"),
+            candidate(51, "3 AGP3.0 Physical Layer Specification"),
+        ]
+        samples.sort(key=lambda c: c.pdf_page)
+        kept = filter_main_chapter_sequence(samples)
+        self.assertEqual([x.pdf_page for x in kept], [11, 16, 51])
 
     def test_invalid_page(self):
         with self.assertRaises(ValueError):

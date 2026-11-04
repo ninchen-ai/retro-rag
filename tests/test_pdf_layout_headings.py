@@ -73,6 +73,35 @@ class LayoutHeadingTests(unittest.TestCase):
             ["4.1 Specifications"],
         )
 
+    def test_transfer_rate_prefix_in_heading(self):
+        doc = pymupdf.open()
+        page = doc.new_page()
+        examples = [
+            "4.4 1x and 2x Transfer Mode Specifications",
+            "4.4.4 1x and 2x Mode Motherboard Specifications",
+            "4.4.5 1x and 2x Mode Add-in Card Specifications",
+            "4.5 4x Transfer Mode Specifications",
+            "4.5.4 4x Mode Motherboard Specification",
+            "4.5.5 4x Mode Add-in Card Specifications",
+        ]
+        for i, title in enumerate(examples):
+            page.insert_text((54, 60 + i * 55), title, fontsize=14, fontname="hebo")
+        raw = doc.tobytes()
+        doc.close()
+        self.assertEqual([h.heading for h in scan_layout_document(raw)], examples)
+
+    def test_plain_numeric_table_value_not_a_heading(self):
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.insert_text((54, 70), "4.4 6.0 ns 5", fontsize=14, fontname="hebo")
+        page.insert_text((54, 110), "4.5 4x Transfer Mode Specifications", fontsize=16, fontname="hebo")
+        raw = doc.tobytes()
+        doc.close()
+        self.assertEqual(
+            [h.heading for h in scan_layout_document(raw)],
+            ["4.5 4x Transfer Mode Specifications"],
+        )
+
     def test_register_and_contents_not_headings(self):
         doc=pymupdf.open()
         p=doc.new_page()

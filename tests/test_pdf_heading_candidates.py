@@ -57,6 +57,24 @@ class HeadingCandidateTests(unittest.TestCase):
         kept = filter_main_chapter_sequence(samples)
         self.assertEqual([x.pdf_page for x in kept], [11, 16, 51])
 
+    def test_agp_false_chapter_six_register_row(self):
+        line = ("6 MST: RZ-IW     htrans#         TARGET ONLY: When ‘0’, "
+                "Core-logic can translate host processor")
+        self.assertEqual(detect_heading_lines(line, 129), [])
+
+    def test_real_chapter_six_kept(self):
+        first = HeadingCandidate(113, 1, "5 Appendix B: Workstation Programming", "fixture", "candidate")
+        chapter = detect_heading_lines(
+            "AGP3.0 Interface Specification\\nRev. 1.0\\n"
+            "6 Appendix C: Glossary of Terms\\n", 143
+        )
+        self.assertEqual([c.heading for c in chapter], ["6 Appendix C: Glossary of Terms"])
+        kept = filter_main_chapter_sequence([
+            HeadingCandidate(n, 1, f"{i} Main Chapter Title", "fixture", "candidate")
+            for i, n in enumerate((11, 16, 51, 96), start=1)
+        ] + [first] + chapter)
+        self.assertEqual(kept[-1].pdf_page, 143)
+
     def test_invalid_page(self):
         with self.assertRaises(ValueError):
             detect_heading_lines("3 AGP3.0 Physical Layer Specification", 0)

@@ -4,7 +4,7 @@ import unittest
 
 SQL = (
     Path(__file__).resolve().parents[1]
-    / "database/migrations/005_multi_model_embeddings.sql"
+    / "database/migrations/006_multi_model_embeddings.sql"
 ).read_text(encoding="utf-8")
 
 

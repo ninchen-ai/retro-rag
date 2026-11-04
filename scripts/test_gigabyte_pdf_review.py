@@ -188,10 +188,10 @@ output_dir.mkdir(parents=True, exist_ok=True)
 
 output_file = output_dir / f"{source_hash[:16]}.json"
 
-if output_file.exists():
-    raise FileExistsError(
-        f"Importergebnis bereits vorhanden: {output_file}"
-    )
+#if output_file.exists():
+#    raise FileExistsError(
+#        f"Importergebnis bereits vorhanden: {output_file}"
+#    )
 
 serialized = json.dumps(
     result,

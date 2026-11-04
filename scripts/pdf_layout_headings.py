@@ -85,7 +85,9 @@ def detect_page_layout_headings(page: pymupdf.Page, page_number: int) -> list[He
         number, title = match.group("number"), match.group("title")
         if len(title) > 90 or len(title.split()) < 2 or title.endswith((".", ";")):
             continue
-        if _REGISTER.match(title):
+        # Register-named subsections (e.g. 5.8.4 AGPSTAT: ...) are valid.
+        # Only unqualified main-number register labels remain suspicious.
+        if "." not in number and _REGISTER.match(title):
             continue
         if not row.bold or (body_size and row.size + 0.25 < body_size):
             continue

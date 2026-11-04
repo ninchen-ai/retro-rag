@@ -62,7 +62,9 @@ def preview_section_chunks(raw: bytes, max_chars: int = DEFAULT_MAX_CHARS) -> Ch
             text = page.get_text("text", sort=True)
             if not text.strip():
                 empty.append(number)
-                continue
+                if not text:
+                    continue
+                # A whitespace-only extraction is still preserved below.
             lines = text.splitlines(keepends=True)
             anchors = by_page.get(number, [])
             boundaries = [(0, None)] + [(index, h) for index, h in anchors]

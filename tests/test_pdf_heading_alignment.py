@@ -32,6 +32,21 @@ class HeadingAlignmentTests(unittest.TestCase):
         )[0]
         self.assertEqual((result.status, result.start_line, result.line_count), ("MATCHED", 0, 2))
 
+    def test_blank_neighbor_must_not_double_count(self):
+        text = "Header\\n3.2 Transfer Mode Operations\\n\\nMore text\\n"
+        matched = align_page_headings(
+            text, [candidate("3.2 Transfer Mode Operations")]
+        )[0]
+        self.assertEqual(matched.status, "MATCHED")
+        self.assertEqual(matched.line_count, 1)
+
+    def test_blank_line_before_heading_must_not_double_count(self):
+        text = "Header\\n\\n3.2 Transfer Mode Operations\\nBody\\n"
+        matched = align_page_headings(
+            text, [candidate("3.2 Transfer Mode Operations")]
+        )[0]
+        self.assertEqual(matched.status, "MATCHED")
+
     def test_missing_and_duplicate_are_not_assumed(self):
         self.assertEqual(
             align_page_headings("Other contents\n", [candidate("1 Overview")])[0].status,

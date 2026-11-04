@@ -32,7 +32,7 @@ def preview_section_chunks(raw: bytes, max_chars: int = DEFAULT_MAX_CHARS) -> Ch
     """Generate unapproved, page-preserving chunks from aligned proposals.
 
     No PDF edits, DB writes, embeddings, or automated approvals.
-    Refuse conflicting anchors on the same extracted text line.
+    Skip conflicting anchors on the same extracted text line for review.
     """
     if max_chars < 1:
         raise ValueError("max_chars must be positive")
@@ -40,16 +40,45 @@ def preview_section_chunks(raw: bytes, max_chars: int = DEFAULT_MAX_CHARS) -> Ch
     aligned = align_document_headings(raw, report.headings)
     by_page = defaultdict(list)
     skipped = []
-    for heading, match in zip(report.headings, aligned, strict=True):
+
+    # align_document_headings reports candidates in PDF page order, whereas
+    # build_heading_review can group dotted chapters before subsections.
+    # Never zip them: positional pairing silently assigns wrong chapters.
+    by_identity = defaultdict(list)
+    for match in aligned:
+        by_identity[(match.pdf_page, match.heading, match.source)].append(match)
+
+    for heading in report.headings:
+        key = (heading.pdf_page, heading.heading, heading.source)
+        matches = by_identity.get(key, [])
+        if len(matches) != 1:
+            skipped.append(f"page {heading.pdf_page}: {heading.heading} [IDENTITY_CONFLICT]")
+            continue
+        match = matches[0]
         if match.status not in USABLE or match.start_line is None:
             skipped.append(f"page {heading.pdf_page}: {heading.heading} [{match.status}]")
             continue
         by_page[heading.pdf_page].append((match.start_line, heading))
+
     for page_no, entries in by_page.items():
-        indexes = [i for i, _ in entries]
-        if len(indexes) != len(set(indexes)):
-            raise ValueError(f"Conflicting section anchors on PDF page {page_no}")
-        entries.sort(key=lambda item: item[0])
+        by_line = defaultdict(list)
+        for index, heading in entries:
+            by_line[index].append(heading)
+        # Ambiguous boundaries are deliberately not used. No arbitrary
+        # winner and no exception preventing the remaining pages from working.
+        by_page[page_no] = sorted(
+            [(index, candidates[0])
+             for index, candidates in by_line.items()
+             if len(candidates) == 1],
+            key=lambda item: item[0],
+        )
+        for index, candidates in by_line.items():
+            if len(candidates) > 1:
+                for heading in candidates:
+                    skipped.append(
+                        f"page {page_no}, line {index}: {heading.heading} "
+                        "[CONFLICTING_ANCHOR]"
+                    )
 
     chunks: list[PdfChunk] = []
     empty: list[int] = []

@@ -37,8 +37,14 @@ def evaluate(reference: dict, reports: list[dict]) -> dict:
         report = indexed.get(page_no)
         by_text = {}
         if report:
-            for item in report["heading_candidates"]:
+            # Prefer individually located reference instances if present.
+            # Otherwise retain existing heading-candidate evaluation.
+            instance_texts = {m["heading"] for m in report.get("label_instances", [])}
+            for item in report.get("label_instances", []):
                 by_text.setdefault(item["heading"], []).append(item)
+            for item in report["heading_candidates"]:
+                if item["heading"] not in instance_texts:
+                    by_text.setdefault(item["heading"], []).append(item)
         for item in page["candidates"]:
             if not item["reviewed"]:
                 unreviewed += 1

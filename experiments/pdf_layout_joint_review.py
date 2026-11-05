@@ -53,6 +53,33 @@ def figure_proximity(heading_box, regions, threshold_pt=40.0):
     return sorted(info, key=lambda x: abs(x["vertical_gap_pt"]))
 
 
+def locate_heading(page, heading):
+    """Disambiguate repeated text using an exact visual-line match.
+
+    Fails closed on multiple identical visual lines rather than inventing a
+    unique match. The original text is unchanged.
+    """
+    from scripts.pdf_layout_headings import visual_lines
+
+    matches = page.search_for(heading)
+    if len(matches) == 1:
+        return matches[0]
+    same_lines = [
+        line for line in visual_lines(page)
+        if line.text.casefold() == heading.casefold()
+    ]
+    if len(same_lines) != 1 or not matches:
+        return None
+    line = same_lines[0]
+    distances = sorted(
+        (abs(box.y0 - line.y) + abs(box.x0 - line.x), box)
+        for box in matches
+    )
+    if len(distances) > 1 and distances[1][0] - distances[0][0] < 2:
+        return None
+    return distances[0][1]
+
+
 def joint_review(raw_pdf, png, detections, pdf_page):
     """Create review suggestions without changing the extraction or anchors."""
     with pymupdf.open(stream=raw_pdf, filetype="pdf") as pdf:
@@ -81,7 +108,8 @@ def joint_review(raw_pdf, png, detections, pdf_page):
             if h.pdf_page != pdf_page:
                 continue
             found = page.search_for(h.heading)
-            if len(found) != 1:
+            rect = locate_heading(page, h.heading)
+            if rect is None:
                 candidates.append({
                     "heading": h.heading,
                     "status": "REVIEW_REQUIRED",
@@ -90,7 +118,6 @@ def joint_review(raw_pdf, png, detections, pdf_page):
                     "nearby_regions": [],
                 })
                 continue
-            rect = found[0]
             nearby = figure_proximity(
                 tuple(rect), regions
             )

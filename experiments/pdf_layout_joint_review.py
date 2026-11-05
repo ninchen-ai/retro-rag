@@ -113,7 +113,7 @@ def locate_heading(page, heading):
     return distances[0][1]
 
 
-def joint_review(raw_pdf, png, detections, pdf_page, *, reference_page=None, auto_labels=False):
+def joint_review(raw_pdf, png, detections, pdf_page, *, reference_page=None, auto_labels=False, span_groups=False):
     """Create review suggestions without changing the extraction or anchors."""
     with pymupdf.open(stream=raw_pdf, filetype="pdf") as pdf:
         if not (1 <= pdf_page <= pdf.page_count):
@@ -173,11 +173,16 @@ def joint_review(raw_pdf, png, detections, pdf_page, *, reference_page=None, aut
         "detector_regions": regions,
         "heading_candidates": candidates,
     }
-    if auto_labels:
+    if auto_labels or span_groups:
         from experiments.pdf_auto_label_instances import collect_span_instances
         with pymupdf.open(stream=raw_pdf, filetype="pdf") as pdf:
             result["auto_label_instances"] = collect_span_instances(
                 pdf[pdf_page - 1], regions
+            )
+        if span_groups:
+            from experiments.pdf_span_groups import propose_span_groups
+            result["span_group_proposals"] = propose_span_groups(
+                result["auto_label_instances"]
             )
     if reference_page is not None:
         from experiments.pdf_label_instances import extract_reference_label_instances
@@ -199,6 +204,7 @@ def main():
     parser.add_argument("--page", type=int, default=38)
     parser.add_argument("--reference", type=Path, help="Optional confirmed reference JSON for physical label instances")
     parser.add_argument("--auto-labels", action="store_true", help="Find unconfirmed figure-overlapping PDF spans without a reference")
+    parser.add_argument("--span-groups", action="store_true", help="Propose conservative multi-line span groups; keeps original spans")
     parser.add_argument("--image", default="/tmp/agpdg11a_page38.png")
     parser.add_argument("--layout-json", default="/tmp/retro-doclayout/layout_report.json")
     parser.add_argument("--out", default="/tmp/retro-doclayout/joint_review.json")
@@ -231,7 +237,8 @@ def main():
         reference_page = ref_pages[0]
     report = joint_review(
         raw, image, layout["detections"], args.page,
-        reference_page=reference_page, auto_labels=args.auto_labels
+        reference_page=reference_page, auto_labels=args.auto_labels,
+        span_groups=args.span_groups
     )
     output = Path(args.out)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -241,7 +248,7 @@ def main():
         print(h["heading"], "|", h.get("review_reason", h["location_status"]))
         for near in h["nearby_regions"]:
             print("  ", near)
-    if args.auto_labels:
+    if args.auto_labels or args.span_groups:
         labels = report["auto_label_instances"]
         print(f"Automatic span proposals: {len(labels)}")
         for item in labels:
@@ -249,6 +256,13 @@ def main():
                 item["text"], "| occurrence", item["occurrence"],
                 "| suppressed duplicate draws", item["duplicate_draws"],
                 "| bbox", item["bbox_pdf_points"]
+            )
+    if args.span_groups:
+        print("Span grouping proposals:")
+        for item in report["span_group_proposals"]:
+            print(
+                item["proposed_text"], "| parts:",
+                [p["text"] for p in item["source_spans"]]
             )
     if reference_page is not None:
         print("Physical reference instances:")

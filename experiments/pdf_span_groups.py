@@ -31,7 +31,10 @@ def _compatible_above(a, b):
         return False
     if abs(a["size_pt"] - b["size_pt"]) > 1.5:
         return False
-    if abs(ax0 - bx0) > max(4, min(ah, bh) * 0.5):
+    # Reject offset neighboring component labels (e.g. Fan / Vent on
+    # agpdg11a page 41). This is intentionally conservative: an uncertain
+    # wrap remains two reviewable spans rather than a false merged label.
+    if abs(ax0 - bx0) > max(3, min(ah, bh) * 0.25):
         return False
     if by0 - ay1 > 4 or by0 - ay0 < min(ah, bh) * 0.4:
         return False

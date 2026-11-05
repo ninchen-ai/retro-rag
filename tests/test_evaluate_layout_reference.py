@@ -40,6 +40,40 @@ class ReferenceEvaluationTests(unittest.TestCase):
         self.assertEqual(result["reviewed_annotations_scored"], 0)
         self.assertEqual(result["missing_or_ambiguous"], 2)
 
+    def test_repeated_reference_needs_separate_locations(self):
+        reference = {"schema_version": 1, "pages": [
+            {"pdf_page": 43, "candidates": [
+                {"text": "System Front", "occurrence": 1, "expected_kind": "figure_label", "reviewed": True},
+                {"text": "System Front", "occurrence": 2, "expected_kind": "figure_label", "reviewed": True},
+            ]}
+        ]}
+        combined = {"pdf_page": 43, "heading_candidates": [
+            {"heading": "System Front System Front", "location_status": "LOCATED",
+             "bbox_pdf_points": [100, 200, 200, 220],
+             "review_reason": "POSSIBLY_FIGURE_ASSOCIATED"}
+        ]}
+        result = evaluate(reference, [combined])
+        self.assertEqual(result["reviewed_annotations_scored"], 0)
+        self.assertEqual(result["missing_or_ambiguous"], 2)
+
+    def test_repeated_reference_scores_distinct_boxes(self):
+        reference = {"schema_version": 1, "pages": [
+            {"pdf_page": 43, "candidates": [
+                {"text": "System Front", "occurrence": 1, "expected_kind": "figure_label", "reviewed": True},
+                {"text": "System Front", "occurrence": 2, "expected_kind": "figure_label", "reviewed": True},
+            ]}
+        ]}
+        loc1 = {"heading": "System Front", "location_status": "LOCATED",
+                "bbox_pdf_points": [100, 200, 200, 220],
+                "review_reason": "POSSIBLY_FIGURE_ASSOCIATED"}
+        loc2 = {**loc1, "bbox_pdf_points": [300, 205, 400, 225]}
+        result = evaluate(reference, [{"pdf_page": 43, "heading_candidates": [loc1, loc2]}])
+        self.assertEqual(result["reviewed_annotations_scored"], 2)
+        self.assertEqual(result["matches"], 2)
+        duplicated = evaluate(reference, [{"pdf_page": 43, "heading_candidates": [loc1, dict(loc1)]}])
+        self.assertEqual(duplicated["reviewed_annotations_scored"], 0)
+        self.assertEqual(duplicated["missing_or_ambiguous"], 2)
+
     def test_duplicate_pages_fail_closed(self):
         with self.assertRaises(ValueError):
             evaluate(self.reference, [self.report, self.report])

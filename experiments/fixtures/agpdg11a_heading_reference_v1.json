@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "pdf": "agpdg11a.pdf",
-  "note": "Initial manually reviewable benchmark. Only reviewed=true entries contribute to scoring. Layout proximity is evidence, not an automatic semantic classification.",
+  "note": "Manually confirmed semantic classifications of 11 physical text instances across PDF pages 38, 40, 41 and 43. Reviewed means reference label confirmation only, NOT import/anchor approval. Detector scoring needs separate uniquely located instances; unresolved cases are excluded from accuracy.",
   "categories": [
     "section_heading",
     "subheading",
@@ -38,14 +38,14 @@
         {
           "text": "INTERNAL AIR FLOW",
           "expected_kind": "subheading",
-          "reviewed": false,
-          "evidence": "Provisional interpretation; needs manual confirmation"
+          "reviewed": true,
+          "evidence": "User confirmed category on PDF page 40 after visual review"
         },
         {
           "text": "Thermal Design Examples",
           "expected_kind": "section_heading",
-          "reviewed": false,
-          "evidence": "Provisional interpretation; needs manual confirmation"
+          "reviewed": true,
+          "evidence": "User confirmed category on PDF page 40 after visual review"
         }
       ]
     },
@@ -55,8 +55,8 @@
         {
           "text": "System Front",
           "expected_kind": "figure_label",
-          "reviewed": false,
-          "evidence": "Overlaps detected figure; needs manual confirmation"
+          "reviewed": true,
+          "evidence": "User confirmed category on PDF page 41 after visual review"
         }
       ]
     },
@@ -66,26 +66,34 @@
         {
           "text": "Mother Board",
           "expected_kind": "figure_label",
-          "reviewed": false,
-          "evidence": "Overlaps detected figure; needs manual confirmation"
+          "reviewed": true,
+          "evidence": "User confirmed category on PDF page 43 after visual review"
         },
         {
           "text": "Added Fan",
           "expected_kind": "figure_label",
-          "reviewed": false,
-          "evidence": "Text position unresolved; needs manual confirmation"
+          "reviewed": true,
+          "evidence": "User confirmed category on PDF page 43 after visual review"
         },
         {
-          "text": "System Front System Front",
+          "text": "System Front",
+          "occurrence": 1,
           "expected_kind": "figure_label",
-          "reviewed": false,
-          "evidence": "Overlaps detected figure; needs manual confirmation"
+          "reviewed": true,
+          "evidence": "User confirmed two separate System Front labels in figure on PDF page 43; physical-instance localization remains pending"
+        },
+        {
+          "text": "System Front",
+          "occurrence": 2,
+          "expected_kind": "figure_label",
+          "reviewed": true,
+          "evidence": "User confirmed two separate System Front labels in figure on PDF page 43; physical-instance localization remains pending"
         },
         {
           "text": "Reference Documents",
           "expected_kind": "section_heading",
-          "reviewed": false,
-          "evidence": "Provisional interpretation; needs manual confirmation"
+          "reviewed": true,
+          "evidence": "User confirmed category on PDF page 43 after visual review"
         }
       ]
     }

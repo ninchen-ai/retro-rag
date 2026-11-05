@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "pdf": "agpdg11a.pdf",
+  "note": "Initial visual assessments from page 40/41 inspection. These are provisional annotations, NOT explicitly confirmed review decisions or import approval. Evaluation is descriptive only.",
+  "cases": [
+    {
+      "pdf_page": 40,
+      "proposed_text": "POWER SUPPLY",
+      "source_texts": [
+        "POWER",
+        "SUPPLY"
+      ],
+      "expected_decision": "merge",
+      "reviewed": false
+    },
+    {
+      "pdf_page": 40,
+      "proposed_text": "Recirculated Air",
+      "source_texts": [
+        "Recirculated",
+        "Air"
+      ],
+      "expected_decision": "merge",
+      "reviewed": false
+    },
+    {
+      "pdf_page": 41,
+      "proposed_text": "Power Supply",
+      "source_texts": [
+        "Power",
+        "Supply"
+      ],
+      "expected_decision": "merge",
+      "reviewed": false
+    },
+    {
+      "pdf_page": 41,
+      "proposed_text": "Fan Vent",
+      "source_texts": [
+        "Fan",
+        "Vent"
+      ],
+      "expected_decision": "keep_separate",
+      "reviewed": false
+    },
+    {
+      "pdf_page": 41,
+      "proposed_text": "60% of area open",
+      "source_texts": [
+        "60% of area",
+        "open"
+      ],
+      "expected_decision": "merge",
+      "reviewed": false
+    }
+  ]
+}

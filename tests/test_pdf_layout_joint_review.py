@@ -26,7 +26,7 @@ class JointLayoutReviewTests(unittest.TestCase):
         regions = [{
             "class_name": "figure",
             "confidence": 0.8,
-            "bbox_pdf_points": [220, 495, 390, 700]
+            "bbox_pdf_points": [200, 495, 390, 700]
         }]
         self.assertEqual(
             figure_proximity((120, 465, 220, 483), regions)[0]["vertical_gap_pt"],
@@ -35,6 +35,47 @@ class JointLayoutReviewTests(unittest.TestCase):
         self.assertEqual(
             figure_proximity((120, 80, 400, 100), regions),
             []
+        )
+
+    def test_heading_inside_figure_region_is_flagged(self):
+        regions = [{
+            "class_name": "figure",
+            "confidence": 0.97,
+            "bbox_pdf_points": [150, 100, 500, 400]
+        }]
+        found = figure_proximity((200, 150, 350, 175), regions)
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["relation"], "OVERLAPS_REGION")
+        self.assertEqual(found[0]["distance_pt"], 0.0)
+
+    def test_heading_below_figure_is_flagged(self):
+        regions = [{
+            "class_name": "figure",
+            "confidence": 0.92,
+            "bbox_pdf_points": [150, 100, 500, 400]
+        }]
+        found = figure_proximity((200, 420, 350, 438), regions)
+        self.assertEqual(found[0]["relation"], "BELOW_REGION")
+        self.assertEqual(found[0]["distance_pt"], 20.0)
+
+    def test_heading_beside_figure_is_flagged(self):
+        regions = [{
+            "class_name": "figure",
+            "confidence": 0.90,
+            "bbox_pdf_points": [300, 100, 500, 400]
+        }]
+        found = figure_proximity((225, 170, 275, 185), regions)
+        self.assertEqual(found[0]["relation"], "BESIDE_REGION")
+        self.assertEqual(found[0]["distance_pt"], 25.0)
+
+    def test_distant_figure_does_not_create_hint(self):
+        regions = [{
+            "class_name": "figure",
+            "confidence": 0.91,
+            "bbox_pdf_points": [420, 500, 550, 690]
+        }]
+        self.assertEqual(
+            figure_proximity((100, 100, 200, 120), regions), []
         )
 
     def test_repeated_term_can_be_located_by_exact_visual_line(self):

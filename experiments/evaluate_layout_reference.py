@@ -47,20 +47,44 @@ def evaluate(reference: dict, reports: list[dict]) -> dict:
             if expected not in FIGURE_KINDS | NEGATIVE_KINDS:
                 raise ValueError(f"Unknown reference category {expected}")
             matches = by_text.get(item["text"], [])
-            if len(matches) != 1 or matches[0].get("location_status") != "LOCATED":
+            occurrence = item.get("occurrence")
+            match = None
+            if occurrence is None:
+                # A single semantic label must not silently consume one of
+                # several distinct physical text occurrences.
+                if len(matches) == 1:
+                    match = matches[0]
+            elif isinstance(occurrence, int) and not isinstance(occurrence, bool) and occurrence > 0:
+                # Physical occurrences are indexed in reading order. Reject
+                # duplicate or missing positions: an identical detector box
+                # must not be used to score two reference instances.
+                located = [
+                    m for m in matches
+                    if m.get("location_status") == "LOCATED"
+                    and isinstance(m.get("bbox_pdf_points"), list)
+                    and len(m["bbox_pdf_points"]) == 4
+                ]
+                if len(located) == len(matches) and len(located) >= occurrence:
+                    boxes = [tuple(m["bbox_pdf_points"]) for m in located]
+                    if len(set(boxes)) == len(boxes):
+                        located.sort(key=lambda m: (m["bbox_pdf_points"][1], m["bbox_pdf_points"][0]))
+                        match = located[occurrence - 1]
+            if match is None or match.get("location_status") != "LOCATED":
                 missing += 1
                 rows.append({
                     "pdf_page": page_no,
                     "text": item["text"],
+                    **({"occurrence": occurrence} if occurrence is not None else {}),
                     "expected_kind": expected,
                     "result": "MISSING_OR_AMBIGUOUS",
                 })
                 continue
-            detected = matches[0].get("review_reason") == "POSSIBLY_FIGURE_ASSOCIATED"
+            detected = match.get("review_reason") == "POSSIBLY_FIGURE_ASSOCIATED"
             target = expected in FIGURE_KINDS
             rows.append({
                 "pdf_page": page_no,
                 "text": item["text"],
+                **({"occurrence": occurrence} if occurrence is not None else {}),
                 "expected_kind": expected,
                 "figure_proximity_flag": detected,
                 "expected_figure_association": target,

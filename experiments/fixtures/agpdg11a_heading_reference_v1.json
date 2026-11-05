@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "pdf": "agpdg11a.pdf",
+  "note": "Initial manually reviewable benchmark. Only reviewed=true entries contribute to scoring. Layout proximity is evidence, not an automatic semantic classification.",
+  "categories": [
+    "section_heading",
+    "subheading",
+    "figure_label",
+    "figure_caption"
+  ],
+  "pages": [
+    {
+      "pdf_page": 38,
+      "candidates": [
+        {
+          "text": "Recommendations for Thermal Performance",
+          "expected_kind": "section_heading",
+          "reviewed": true,
+          "evidence": "User-confirmed page 38 visual review"
+        },
+        {
+          "text": "ADD-IN CARD",
+          "expected_kind": "figure_label",
+          "reviewed": true,
+          "evidence": "User-confirmed technical drawing label page 38"
+        },
+        {
+          "text": "FAN DIRECTION",
+          "expected_kind": "figure_label",
+          "reviewed": true,
+          "evidence": "User-confirmed technical drawing label page 38"
+        }
+      ]
+    },
+    {
+      "pdf_page": 40,
+      "candidates": [
+        {
+          "text": "INTERNAL AIR FLOW",
+          "expected_kind": "subheading",
+          "reviewed": false,
+          "evidence": "Provisional interpretation; needs manual confirmation"
+        },
+        {
+          "text": "Thermal Design Examples",
+          "expected_kind": "section_heading",
+          "reviewed": false,
+          "evidence": "Provisional interpretation; needs manual confirmation"
+        }
+      ]
+    },
+    {
+      "pdf_page": 41,
+      "candidates": [
+        {
+          "text": "System Front",
+          "expected_kind": "figure_label",
+          "reviewed": false,
+          "evidence": "Overlaps detected figure; needs manual confirmation"
+        }
+      ]
+    },
+    {
+      "pdf_page": 43,
+      "candidates": [
+        {
+          "text": "Mother Board",
+          "expected_kind": "figure_label",
+          "reviewed": false,
+          "evidence": "Overlaps detected figure; needs manual confirmation"
+        },
+        {
+          "text": "Added Fan",
+          "expected_kind": "figure_label",
+          "reviewed": false,
+          "evidence": "Text position unresolved; needs manual confirmation"
+        },
+        {
+          "text": "System Front System Front",
+          "expected_kind": "figure_label",
+          "reviewed": false,
+          "evidence": "Overlaps detected figure; needs manual confirmation"
+        },
+        {
+          "text": "Reference Documents",
+          "expected_kind": "section_heading",
+          "reviewed": false,
+          "evidence": "Provisional interpretation; needs manual confirmation"
+        }
+      ]
+    }
+  ]
+}

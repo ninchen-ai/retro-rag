@@ -16,7 +16,7 @@ _FIGURE_HINTS = ("system front", "mother board", "added fan", "fan direction",
                  "internal air flow", "add-in card")
 
 
-def build_quality_report(raw: bytes, filename: str) -> dict:
+def build_quality_report(raw: bytes, filename: str, *, layout_review: dict | None = None) -> dict:
     review = build_heading_review(raw)
     aligned = align_document_headings(raw, review.headings)
     preview = preview_section_chunks(raw)
@@ -54,7 +54,26 @@ def build_quality_report(raw: bytes, filename: str) -> dict:
                 "alignment": state,
                 "review_required": True,
             })
-    return {
+    # Keep detector output separate from the original text-alignment issues.
+    # Detector regions are provisional evidence, never acceptance decisions.
+    extra_layout = None
+    if layout_review is not None:
+        if layout_review.get("approved") is not False:
+            raise ValueError("Layout review must explicitly be unapproved")
+        page = layout_review.get("pdf_page")
+        matches = [
+            h for h in layout_review.get("heading_candidates", [])
+            if isinstance(h, dict)
+            and isinstance(h.get("heading"), str)
+            and h.get("status") == "REVIEW_REQUIRED"
+        ]
+        extra_layout = {
+            "pdf_page": page,
+            "approved": False,
+            "heading_candidates": matches,
+        }
+
+    report = {
         "filename": filename,
         "style": review.style,
         "approved": False,
@@ -71,6 +90,9 @@ def build_quality_report(raw: bytes, filename: str) -> dict:
         "warnings": list(review.warnings),
         "issues": issues,
     }
+    if extra_layout is not None:
+        report["layout_review"] = extra_layout
+    return report
 
 
 def format_quality_json(report: dict) -> str:

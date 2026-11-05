@@ -80,6 +80,31 @@ def targeted_prompt(candidates: tuple[str, ...]) -> str:
     )
 
 
+def functional_prompt(candidates: tuple[str, ...]) -> str:
+    """Test B: functional layout rules, without leaking expected labels."""
+    lines = json.dumps(list(candidates), ensure_ascii=False)
+    return (
+        "You are reviewing the DOCUMENT STRUCTURE of a technical hardware manual. "
+        "Inspect the supplied page image and classify ONLY these text candidates: "
+        + lines
+        + "\nEvaluate what each text element DOES in the document, not how bold, "
+          "large, or uppercase it looks. A section_heading introduces a prose "
+          "section whose subsequent paragraphs belong to it. A figure_label "
+          "names a component, direction, property, or region inside or next to "
+          "a technical drawing; a figure_caption describes or numbers an illustration. "
+          "Inspect spatial grouping with arrows, drawing borders, components, "
+          "nearby captions, and whether explanatory prose or a drawing follows. "
+          "Never treat capitalization or bold text alone as sufficient evidence. "
+          "If spatial evidence is insufficient, use uncertain. "
+          "For each candidate return exactly one JSON object with keys "
+          "text, kind, reason. The kind must be one of section_heading, "
+          "figure_label, figure_caption, body_text, uncertain. "
+          "Give a brief evidence-based reason (max 20 words). "
+          "Return ONLY a JSON object with an elements array; do not transcribe "
+          "other text or approve any item."
+    )
+
+
 def render_page(raw: bytes, page_number: int, dpi: int) -> bytes:
     if page_number < 1:
         raise ValueError("PDF page must be at least 1")
@@ -155,6 +180,8 @@ def main() -> None:
                         help="Default is CPU-only via num_gpu=0")
     parser.add_argument("--timeout", type=int, default=1200)
     parser.add_argument("--mode", choices=("full", "targeted"), default="full")
+    parser.add_argument("--prompt-variant", choices=("baseline", "functional"),
+                        default="baseline", help="Functional variant is for targeted mode")
     parser.add_argument("--candidate", action="append", default=None,
                         help="Candidate to classify; repeat as needed in targeted mode")
     parser.add_argument("--num-ctx", type=int, default=None)
@@ -168,12 +195,19 @@ def main() -> None:
         parser.error("--num-ctx must be at least 1024")
     if args.num_predict is not None and args.num_predict < 1:
         parser.error("--num-predict must be positive")
+    if args.prompt_variant == "functional" and args.mode != "targeted":
+        parser.error("--prompt-variant functional requires --mode targeted")
     if args.candidate and args.mode != "targeted":
         parser.error("--candidate requires --mode targeted")
     candidates = tuple(args.candidate or DEFAULT_CANDIDATES.get(args.page, ()))
     if args.mode == "targeted" and not candidates:
         parser.error("No candidates for this page; supply --candidate one or more times")
-    prompt = targeted_prompt(candidates) if args.mode == "targeted" else PROMPT
+    if args.mode == "full":
+        prompt = PROMPT
+    elif args.prompt_variant == "functional":
+        prompt = functional_prompt(candidates)
+    else:
+        prompt = targeted_prompt(candidates)
     context = args.num_ctx or (8192 if args.mode == "targeted" else 4096)
     predict = args.num_predict or (512 if args.mode == "targeted" else None)
     password = os.getenv("NEXTCLOUD_APP_PASSWORD") or getpass.getpass(
@@ -184,7 +218,8 @@ def main() -> None:
     png = render_page(raw, args.page, args.dpi)
     print(f"PDF-Seite {args.page}, PNG {len(png)} Bytes, "
           f"Modell {args.model}, CPU-only: {not args.allow_gpu}, "
-          f"Modus: {args.mode}, Kontext: {context}, max. Ausgabe: {predict}", flush=True)
+          f"Modus: {args.mode}, Prompt: {args.prompt_variant}, "
+          f"Kontext: {context}, max. Ausgabe: {predict}", flush=True)
     for i in range(1, args.runs + 1):
         start = time.perf_counter()
         try:

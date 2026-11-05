@@ -39,6 +39,34 @@ class SpanGroupTests(unittest.TestCase):
         ]
         self.assertEqual(propose_span_groups(rows), [])
 
+    def test_fan_vent_page41_remains_separate(self):
+        # Confirmed negative reference from AGP Design Guide page 41.
+        rows = [
+            label("Fan", 273.5, 435.3, 306.3, 460.7),
+            label("Vent", 263.0, 457.8, 302.9, 483.3),
+        ]
+        self.assertEqual(propose_span_groups(rows), [])
+
+    def test_page41_power_supply_still_merges(self):
+        rows = [
+            label("Power", 452.2, 185.5, 507.6, 211.0),
+            label("Supply", 452.2, 207.7, 513.9, 233.2),
+        ]
+        self.assertEqual(
+            [item["proposed_text"] for item in propose_span_groups(rows)],
+            ["Power Supply"]
+        )
+
+    def test_page41_open_area_still_merges(self):
+        rows = [
+            label("60% of area", 130.1, 625.6, 178.4, 638.9),
+            label("open", 130.1, 637.6, 150.7, 651.4),
+        ]
+        self.assertEqual(
+            [item["proposed_text"] for item in propose_span_groups(rows)],
+            ["60% of area open"]
+        )
+
     def test_different_figures_never_group(self):
         rows = [
             label("POWER", 100, 100, 150, 115),

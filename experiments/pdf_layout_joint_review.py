@@ -36,21 +36,54 @@ def pixel_box_to_pdf(box, page_width, page_height, image_width, image_height):
 
 
 def figure_proximity(heading_box, regions, threshold_pt=40.0):
-    """Suggest possible adjacency; this is NOT a semantic classification."""
-    bottom = heading_box[3]
+    """Report geometric relationships to figures; never decide semantics.
+
+    Overlap and near-above/below relationships require horizontal overlap.
+    When rectangles are separated horizontally, allow a small side gap only
+    if their vertical ranges overlap. All distances are PDF points.
+    """
+    hx0, hy0, hx1, hy1 = map(float, heading_box)
+    if not (hx0 < hx1 and hy0 < hy1):
+        raise ValueError("Invalid heading rectangle")
     info = []
     for region in regions:
         if region["class_name"] not in ("figure", "figure_caption"):
             continue
-        other = region["bbox_pdf_points"]
-        gap = other[1] - bottom
-        if -8 <= gap <= threshold_pt:
-            info.append({
+        fx0, fy0, fx1, fy1 = map(float, region["bbox_pdf_points"])
+        if not (fx0 < fx1 and fy0 < fy1):
+            continue
+        horizontal_overlap = min(hx1, fx1) - max(hx0, fx0)
+        vertical_overlap = min(hy1, fy1) - max(hy0, fy0)
+        relation = None
+        gap = None
+
+        if horizontal_overlap > 0 and vertical_overlap > 0:
+            relation = "OVERLAPS_REGION"
+            gap = 0.0
+        elif horizontal_overlap > 0 and 0 <= fy0 - hy1 <= threshold_pt:
+            relation = "ABOVE_REGION"
+            gap = fy0 - hy1
+        elif horizontal_overlap > 0 and 0 <= hy0 - fy1 <= threshold_pt:
+            relation = "BELOW_REGION"
+            gap = hy0 - fy1
+        elif vertical_overlap > 0:
+            side_gap = fx0 - hx1 if hx1 <= fx0 else hx0 - fx1
+            if 0 <= side_gap <= threshold_pt:
+                relation = "BESIDE_REGION"
+                gap = side_gap
+
+        if relation is not None:
+            item = {
                 "class_name": region["class_name"],
-                "vertical_gap_pt": round(gap, 1),
+                "relation": relation,
+                "distance_pt": round(gap, 1),
                 "confidence": region["confidence"],
-            })
-    return sorted(info, key=lambda x: abs(x["vertical_gap_pt"]))
+            }
+            # Backward-compatible for prior below-figure tests/reports.
+            if relation == "ABOVE_REGION":
+                item["vertical_gap_pt"] = round(gap, 1)
+            info.append(item)
+    return sorted(info, key=lambda item: (item["distance_pt"], item["class_name"]))
 
 
 def locate_heading(page, heading):

@@ -105,6 +105,65 @@ def functional_prompt(candidates: tuple[str, ...]) -> str:
     )
 
 
+def describe_pdf_layout(raw: bytes, page_number: int,
+                        candidates: tuple[str, ...]) -> dict:
+    """Read-only layout metadata; no inferred or gold-standard labels.
+
+    Exact PDF text positions and neighboring lines are offered as evidence.
+    Candidate matches must be unique to avoid misleading layout hints.
+    """
+    from scripts.pdf_layout_headings import visual_lines
+
+    with pymupdf.open(stream=raw, filetype="pdf") as doc:
+        if not (1 <= page_number <= doc.page_count):
+            raise ValueError("PDF page number out of range")
+        page = doc[page_number - 1]
+        lines = visual_lines(page)
+        details = []
+        for candidate in candidates:
+            matches = page.search_for(candidate)
+            if len(matches) != 1:
+                details.append({
+                    "text": candidate,
+                    "status": "not_unique_or_missing",
+                    "match_count": len(matches),
+                })
+                continue
+            target = matches[0]
+            nearby = sorted(
+                (
+                    line for line in lines
+                    if line.y >= target.y1 - 50
+                    and line.y <= target.y1 + 105
+                    and candidate.casefold() not in line.text.casefold()
+                ),
+                key=lambda line: (abs(line.y - target.y1), line.y),
+            )[:8]
+            aligned = [
+                line for line in lines
+                if abs(line.y - target.y0) < 12
+                and candidate.casefold() in line.text.casefold()
+            ]
+            info = aligned[0] if aligned else None
+            details.append({
+                "text": candidate,
+                "status": "located",
+                "bbox_points": [round(v, 1) for v in target],
+                "font_size_pt": round(info.size, 1) if info else None,
+                "bold": info.bold if info else None,
+                "nearby_text_lines": [
+                    {"text": line.text[:140], "y": round(line.y, 1)}
+                    for line in nearby
+                ],
+            })
+        return {
+            "page_size_points": [
+                round(page.rect.width, 1), round(page.rect.height, 1)
+            ],
+            "candidates": details,
+        }
+
+
 def render_page(raw: bytes, page_number: int, dpi: int) -> bytes:
     if page_number < 1:
         raise ValueError("PDF page must be at least 1")
@@ -222,6 +281,8 @@ def main() -> None:
     parser.add_argument("--candidate", action="append", default=None,
                         help="Candidate to classify; repeat as needed in targeted mode")
     parser.add_argument("--num-ctx", type=int, default=None)
+    parser.add_argument("--layout-hints", action="store_true",
+                        help="Append PyMuPDF coordinates, font, and nearby text as evidence")
     parser.add_argument("--focus-crop", action="store_true",
                         help="Attach magnified cropped image in addition to full page")
     parser.add_argument("--focus", default="FAN DIRECTION",
@@ -233,6 +294,8 @@ def main() -> None:
         parser.error("--dpi must be between 72 and 200")
     if args.runs < 1:
         parser.error("--runs must be positive")
+    if args.layout_hints and args.mode != "targeted":
+        parser.error("--layout-hints requires --mode targeted")
     if args.focus_crop and args.mode != "targeted":
         parser.error("--focus-crop requires --mode targeted")
     if args.focus_crop and not (72 <= args.crop_dpi <= 300):
@@ -261,6 +324,14 @@ def main() -> None:
     )
     raw, _, _ = get_webdav(args.nextcloud_url, args.nextcloud_user, password,
                            args.pdf_path)
+    if args.layout_hints:
+        layout = describe_pdf_layout(raw, args.page, candidates)
+        prompt += ("\nHere is additional factual geometry and nearby text "
+                   "extracted from the PDF. These are observations, NOT "
+                   "classifications or approval decisions. Interpret them "
+                   "against the image rather than treating proximity as proof "
+                   "of a heading.\n" + json.dumps(layout, ensure_ascii=False))
+        print("Layout-Hinweise:", json.dumps(layout, ensure_ascii=False, indent=2), flush=True)
     png = render_page(raw, args.page, args.dpi)
     extra_images: tuple[bytes, ...] = ()
     if args.focus_crop:

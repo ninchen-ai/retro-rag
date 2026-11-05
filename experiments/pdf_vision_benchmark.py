@@ -115,8 +115,44 @@ def render_page(raw: bytes, page_number: int, dpi: int) -> bytes:
         return pix.tobytes("png")
 
 
+def render_focus_crop(
+    raw: bytes, page_number: int, focus_text: str, dpi: int,
+    before_pt: float = 75, after_pt: float = 230,
+) -> tuple[bytes, tuple[float, float, float, float]]:
+    """Render a PDF rectangle spanning the sought label and nearby diagram.
+
+    Use the whole page width, with context above and below the label.
+    The PDF is only read, never modified. Raises if the label is not located.
+    """
+    if page_number < 1:
+        raise ValueError("PDF page must be at least 1")
+    if dpi < 72:
+        raise ValueError("crop DPI must be at least 72")
+    with pymupdf.open(stream=raw, filetype="pdf") as doc:
+        if page_number > doc.page_count:
+            raise ValueError("PDF page number out of range")
+        page = doc[page_number - 1]
+        matches = page.search_for(focus_text)
+        if len(matches) != 1:
+            raise ValueError(
+                f"Expected one match for {focus_text!r} on page {page_number}, "
+                f"found {len(matches)}; select a unique --focus label"
+            )
+        rect = matches[0]
+        bound = page.rect
+        clip = pymupdf.Rect(
+            bound.x0, max(bound.y0, rect.y0 - before_pt),
+            bound.x1, min(bound.y1, rect.y1 + after_pt)
+        )
+        if clip.is_empty:
+            raise ValueError("Focus crop rectangle is empty")
+        image = page.get_pixmap(dpi=dpi, clip=clip, alpha=False).tobytes("png")
+        return image, (clip.x0, clip.y0, clip.x1, clip.y1)
+
+
 def query_ollama(png: bytes, *, model: str, url: str, cpu_only: bool,
-                 timeout: int, prompt: str = PROMPT, num_ctx: int = 4096, num_predict: int | None = None) -> dict:
+                 timeout: int, prompt: str = PROMPT, num_ctx: int = 4096,
+                 num_predict: int | None = None, extra_images: tuple[bytes, ...] = ()) -> dict:
     payload = {
         "model": model,
         "stream": False,
@@ -132,7 +168,8 @@ def query_ollama(png: bytes, *, model: str, url: str, cpu_only: bool,
         "messages": [{
             "role": "user",
             "content": prompt,
-            "images": [base64.b64encode(png).decode("ascii")],
+            "images": [base64.b64encode(img).decode("ascii")
+                       for img in (png, *extra_images)],
         }],
     }
     request = Request(
@@ -185,12 +222,21 @@ def main() -> None:
     parser.add_argument("--candidate", action="append", default=None,
                         help="Candidate to classify; repeat as needed in targeted mode")
     parser.add_argument("--num-ctx", type=int, default=None)
+    parser.add_argument("--focus-crop", action="store_true",
+                        help="Attach magnified cropped image in addition to full page")
+    parser.add_argument("--focus", default="FAN DIRECTION",
+                        help="Unique PDF text to center the extra crop on")
+    parser.add_argument("--crop-dpi", type=int, default=200)
     parser.add_argument("--num-predict", type=int, default=None)
     args = parser.parse_args()
     if not (72 <= args.dpi <= 200):
         parser.error("--dpi must be between 72 and 200")
     if args.runs < 1:
         parser.error("--runs must be positive")
+    if args.focus_crop and args.mode != "targeted":
+        parser.error("--focus-crop requires --mode targeted")
+    if args.focus_crop and not (72 <= args.crop_dpi <= 300):
+        parser.error("--crop-dpi must be between 72 and 300")
     if args.num_ctx is not None and args.num_ctx < 1024:
         parser.error("--num-ctx must be at least 1024")
     if args.num_predict is not None and args.num_predict < 1:
@@ -216,6 +262,18 @@ def main() -> None:
     raw, _, _ = get_webdav(args.nextcloud_url, args.nextcloud_user, password,
                            args.pdf_path)
     png = render_page(raw, args.page, args.dpi)
+    extra_images: tuple[bytes, ...] = ()
+    if args.focus_crop:
+        crop, region = render_focus_crop(
+            raw, args.page, args.focus, args.crop_dpi
+        )
+        extra_images = (crop,)
+        prompt += ("\nThe FIRST image is the full page. The SECOND image is a "
+                   "magnified crop around one candidate and adjacent content. "
+                   "Use both images for spatial context; do not assume "
+                   "the focused candidate is a figure label or a heading.")
+        print(f"Crop: {args.focus!r}, PDF rectangle {region}, "
+              f"{args.crop_dpi} DPI, {len(crop)} bytes", flush=True)
     print(f"PDF-Seite {args.page}, PNG {len(png)} Bytes, "
           f"Modell {args.model}, CPU-only: {not args.allow_gpu}, "
           f"Modus: {args.mode}, Prompt: {args.prompt_variant}, "
@@ -226,7 +284,8 @@ def main() -> None:
             result = query_ollama(
                 png, model=args.model, url=args.ollama_url,
                 cpu_only=not args.allow_gpu, timeout=args.timeout,
-                prompt=prompt, num_ctx=context, num_predict=predict
+                prompt=prompt, num_ctx=context, num_predict=predict,
+                extra_images=extra_images
             )
         except (HTTPError, URLError, TimeoutError) as exc:
             raise SystemExit(f"Ollama request failed: {exc}") from exc

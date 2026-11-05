@@ -49,12 +49,32 @@ def collect_span_instances(page, regions, *, overlap_threshold=0.5):
                 ]
                 if not overlapping:
                     continue
+                # Keep the actual detector rectangle for later grouping.
+                # figure_proximity returns relation metadata but not the
+                # original bbox, so attach matching overlapping figures.
+                overlapping_with_boxes = []
+                for region in regions:
+                    if region.get("class_name") != "figure":
+                        continue
+                    rx0, ry0, rx1, ry1 = region["bbox_pdf_points"]
+                    if min(rect[2], rx1) <= max(rect[0], rx0):
+                        continue
+                    if min(rect[3], ry1) <= max(rect[1], ry0):
+                        continue
+                    overlapping_with_boxes.append({
+                        "class_name": "figure",
+                        "relation": "OVERLAPS_REGION",
+                        "bbox_pdf_points": region["bbox_pdf_points"],
+                        "confidence": region["confidence"],
+                    })
+                if not overlapping_with_boxes:
+                    continue
                 groups[normalize(text)].append({
                     "text": text,
                     "bbox_pdf_points": [round(x, 1) for x in rect],
                     "font": span.get("font", ""),
                     "size_pt": round(float(span.get("size", 0)), 1),
-                    "nearby_regions": overlapping,
+                    "nearby_regions": overlapping_with_boxes,
                 })
 
     instances = []

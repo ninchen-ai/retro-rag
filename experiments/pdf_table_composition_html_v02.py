@@ -7,7 +7,7 @@ import json
 from experiments.pdf_review_html_v02 import _escape_script_json
 
 
-def composition_panel(proposal, current, secret):
+def composition_panel(proposal, current, secret, original_regions=None):
     """Embed evidence and derived preview safely in the existing review page."""
     rows = proposal["preview_rows"]
     source_ids = proposal["source_region_ids"]
@@ -23,6 +23,29 @@ def composition_panel(proposal, current, secret):
                         + "</td>" for c in row["cells"])
         prov = html.escape(f'{row["region_id"]} · source row {row["row_index"] + 1}')
         body.append("<tr title='" + prov + "'>" + items + "</tr>")
+    originals = []
+    original_regions = original_regions or {}
+    for rid in source_ids:
+        region = original_regions.get(rid)
+        if region is None or "raw_cells" not in region:
+            raise ValueError("Missing original PyMuPDF matrix")
+        original_rows = []
+        for original_row in region["raw_cells"]:
+            items = "".join(
+                "<td>" + html.escape("" if cell is None else cell) + "</td>"
+                for cell in original_row
+            )
+            original_rows.append("<tr>" + items + "</tr>")
+        originals.append(
+            '<div style="flex:1;min-width:260px"><strong>' +
+            html.escape(rid) +
+            '</strong><div class="tablewrap"><table>' +
+            "".join(original_rows) + "</table></div></div>"
+        )
+    originals_html = (
+        '<div style="display:flex;gap:12px;flex-wrap:wrap;margin:12px 0">' +
+        "".join(originals) + "</div>"
+    )
     data = {
         "proposal": proposal,
         "current": current,
@@ -40,6 +63,8 @@ def composition_panel(proposal, current, secret):
 <div class="panel">
 <p><strong>""" + safe_title + """</strong></p>
 <p>Quelle / Reihenfolge: <code>""" + safe_ids + """</code></p>
+<p><strong>Unveränderte Originalmatrizen nebeneinander:</strong></p>""" +
+            originals_html + """
 <p><strong>Vorgeschlagene logische Darstellung:</strong> """ +
             str(len(rows) - 1) + " Datenzeilen × " + str(columns) +
             """ Spalten (fortlaufende Blöcke, nicht nebeneinander verschmolzene Spalten).</p>

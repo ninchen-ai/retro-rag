@@ -1,0 +1,377 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ninchen-ai/retro-rag/blob/feature/pdf-chapter-chunking/schemas/pdf_document_structure_v0.1.schema.json",
+  "title": "Retro-RAG PDF document structure v0.1",
+  "description": "Read-only, review-first intermediate representation; not an ingestion approval or lossless-content certificate.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "document",
+    "pages",
+    "source_spans",
+    "elements",
+    "relationships",
+    "quality"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1"
+    },
+    "document": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "document_id",
+        "source_uri",
+        "sha256",
+        "page_count"
+      ],
+      "properties": {
+        "document_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_uri": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "page_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "filename": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retrieved_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "pages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "page_number",
+          "width_pt",
+          "height_pt",
+          "rotation",
+          "text"
+        ],
+        "properties": {
+          "page_number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "width_pt": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "height_pt": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "rotation": {
+            "enum": [
+              0,
+              90,
+              180,
+              270
+            ]
+          },
+          "text": {
+            "type": "string",
+            "description": "Exact result of page.get_text('text') for this extraction profile, including line breaks; empty is allowed."
+          },
+          "text_extraction": {
+            "type": "string",
+            "enum": [
+              "pymupdf-text",
+              "other"
+            ]
+          }
+        }
+      }
+    },
+    "source_spans": {
+      "type": "array",
+      "description": "Optional geometric spans, preserved independently of proposed headings and groupings. Not a replacement for pages[].text.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "span_id",
+          "page_number",
+          "text",
+          "bbox_pt",
+          "reading_order"
+        ],
+        "properties": {
+          "span_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "page_number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "text": {
+            "type": "string"
+          },
+          "bbox_pt": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "items": false,
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "reading_order": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rotation": {
+            "type": "integer"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "pymupdf",
+              "ocr",
+              "other"
+            ]
+          }
+        }
+      }
+    },
+    "elements": {
+      "type": "array",
+      "description": "Interpretations only, never edits to source spans/text.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "element_id",
+          "element_type",
+          "page_number",
+          "bbox_pt",
+          "title_or_text",
+          "source_span_ids",
+          "parent_id",
+          "provenance",
+          "review"
+        ],
+        "properties": {
+          "element_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "element_type": {
+            "enum": [
+              "heading",
+              "paragraph",
+              "table",
+              "figure",
+              "caption",
+              "list",
+              "navigation",
+              "other"
+            ]
+          },
+          "page_number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "bbox_pt": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "items": false,
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "title_or_text": {
+            "type": "string"
+          },
+          "source_span_ids": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provenance": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "method",
+                "evidence"
+              ],
+              "properties": {
+                "method": {
+                  "enum": [
+                    "pdf_outline",
+                    "printed_toc",
+                    "text_layout",
+                    "doclayout_yolo",
+                    "ocr",
+                    "manual",
+                    "other"
+                  ]
+                },
+                "evidence": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "confidence": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "model_id": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "review": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "enum": [
+                  "proposed",
+                  "confirmed",
+                  "rejected",
+                  "unclear"
+                ]
+              },
+              "reviewer": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reviewed_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "relationships": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "from_id",
+          "to_id",
+          "type"
+        ],
+        "properties": {
+          "from_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "to_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "enum": [
+              "references",
+              "caption_of",
+              "continues",
+              "related_to"
+            ]
+          }
+        }
+      }
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "review_status",
+        "text_integrity_checked"
+      ],
+      "properties": {
+        "review_status": {
+          "enum": [
+            "unreviewed",
+            "in_review",
+            "reviewed"
+          ]
+        },
+        "text_integrity_checked": {
+          "type": "boolean"
+        },
+        "text_integrity_method": {
+          "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

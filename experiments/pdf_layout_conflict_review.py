@@ -136,21 +136,29 @@ def main():
     parser.add_argument("--quality-json", type=Path, required=True)
     parser.add_argument("--layout-json", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--page-width-pt", type=float, required=True)
-    parser.add_argument("--page-height-pt", type=float, required=True)
+    parser.add_argument("--outline-json", type=Path, required=True)
     args = parser.parse_args()
     if args.out.resolve() in {args.quality_json.resolve(),
-                              args.layout_json.resolve()}:
+                              args.layout_json.resolve(),
+                              args.outline_json.resolve()}:
         parser.error("Output must not overwrite input")
     quality = json.loads(args.quality_json.read_text(encoding="utf-8"))
     layout = json.loads(args.layout_json.read_text(encoding="utf-8"))
+    outline = json.loads(args.outline_json.read_text(encoding="utf-8"))
+    if outline["document"]["sha256"] != quality["document_sha256"]:
+        parser.error("Document SHA256 does not match quality report")
+    if not 1 <= quality["page_number"] <= len(outline["pages"]):
+        parser.error("Bad page number in quality report")
+    page = outline["pages"][quality["page_number"] - 1]
+    if page["page_number"] != quality["page_number"] or page["rotation"]:
+        parser.error("Page metadata mismatch or rotated page")
     if quality["source_image"] != layout["source_image"]:
         parser.error("Image names differ between quality and layout reports")
     width, height = quality["image_size_pixels"]
     if width <= 0 or height <= 0:
         parser.error("Bad image dimensions")
-    page_width = args.page_width_pt
-    page_height = args.page_height_pt
+    page_width = page["width_pt"]
+    page_height = page["height_pt"]
     if page_width <= 0 or page_height <= 0:
         parser.error("Page dimensions must be positive")
     regions = []

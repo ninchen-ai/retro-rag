@@ -1,12 +1,14 @@
 """Synthetic PDF regression tests for read-only outline proposals."""
 import copy
 import unittest
+from unittest.mock import patch
 
 import pymupdf
 
 from experiments.pdf_base_adapter import build_base_structure
 from experiments.pdf_outline_adapter import (
     add_outline_proposals, classify_outline_title, _group_heading_rectangles, _variants,
+    _find_list_bullet,
 )
 from experiments.validate_pdf_structure import validate
 
@@ -186,7 +188,11 @@ class PdfOutlineAdapterTests(unittest.TestCase):
         raw = doc.tobytes()
         doc.close()
         base = build_base_structure(raw, source_uri="file:///tmp/list.pdf")
-        result = add_outline_proposals(raw, base)
+        # Core PDF fonts cannot encode U+2022 reliably (often extracts U+00B7).
+        # Stub only the glyph lookup; test hierarchy independently.
+        with patch("experiments.pdf_outline_adapter._find_list_bullet",
+                   return_value=pymupdf.Rect(72, 138, 78, 153)):
+            result = add_outline_proposals(raw, base)
         self.assertEqual(validate(result), [])
         self.assertEqual([e["element_type"] for e in result["elements"]],
                          ["heading", "list", "heading"])
@@ -195,6 +201,26 @@ class PdfOutlineAdapterTests(unittest.TestCase):
         self.assertIn("list_bullet=near_title",
                       result["elements"][1]["provenance"][0]["evidence"])
         self.assertEqual(result["pages"], base["pages"])
+
+    def test_bullet_geometry_uses_same_line_left_side(self):
+        class Page:
+            cropbox = pymupdf.Rect(0, 0, 612, 792)
+
+            def search_for(self, query):
+                self_query = query
+                if self_query != "•":
+                    return []
+                return [
+                    pymupdf.Rect(72, 138, 78, 153),
+                    pymupdf.Rect(72, 255, 78, 270),
+                ]
+
+        found = _find_list_bullet(Page(), [90, 138, 335, 153])
+        self.assertIsNotNone(found)
+        self.assertEqual(round(found.y0), 138)
+        self.assertIsNone(
+            _find_list_bullet(Page(), [90, 200, 335, 215])
+        )
 
     def test_missing_visible_bullet_stays_unclear(self):
         doc = pymupdf.open()

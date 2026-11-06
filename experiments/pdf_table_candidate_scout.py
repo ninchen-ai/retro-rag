@@ -1,4 +1,4 @@
-"""Read-only preselection of test pages with both outline table anchors and PyMuPDF tables.
+"""Read-only preselection of PDF test pages from PyMuPDF tables, with optional outline context.
 
 No DocLayout-YOLO inference; chooses review candidates, not validated associations.
 No changes to PDFs, Nextcloud, structure JSON, database, or embeddings.
@@ -19,14 +19,18 @@ from experiments.pdf_table_quality_review import inspect_cells
 
 
 def shortlist(outline, page_tables, *, max_pages=5, min_rows=2,
-              min_cols=2):
-    """Prioritize diverse table shapes on pages with proposed outline table anchors.
+              min_cols=2, mode="all"):
+    """Prioritize diverse table shapes even without table bookmarks.
 
-    page_tables maps 1-based PDF page -> sequence of raw PyMuPDF table reports.
-    Do not treat shape or same-page appearance as proof of correspondence.
+    mode=all evaluates any supplied page with PyMuPDF tables; mode=outline
+    restricts to pages with proposed table bookmarks (legacy behavior).
+    page_tables maps 1-based page -> raw PyMuPDF table reports.
+    Same-page appearance is not proof of correspondence.
     """
     if max_pages < 1 or min_rows < 1 or min_cols < 1:
         raise ValueError("Thresholds must be positive")
+    if mode not in ("all", "outline"):
+        raise ValueError("mode must be all or outline")
     anchors_by_page = defaultdict(list)
     for element in outline["elements"]:
         if element["element_type"] != "table":
@@ -39,7 +43,9 @@ def shortlist(outline, page_tables, *, max_pages=5, min_rows=2,
             "bbox_pt": element["bbox_pt"],
         })
     candidates = []
-    for page_number, anchors in anchors_by_page.items():
+    pages = sorted(page_tables) if mode == "all" else sorted(anchors_by_page)
+    for page_number in pages:
+        anchors = anchors_by_page.get(page_number, [])
         tables = page_tables.get(page_number, [])
         usable = [t for t in tables
                   if t["rows"] >= min_rows and t["columns"] >= min_cols]
@@ -48,6 +54,7 @@ def shortlist(outline, page_tables, *, max_pages=5, min_rows=2,
         shapes = sorted({(t["rows"], t["columns"]) for t in usable})
         candidates.append({
             "page_number": page_number,
+            "context_status": ("HAS_TABLE_BOOKMARK" if anchors else "NO_TABLE_BOOKMARK"),
             "outline_table_anchors": anchors,
             "pymupdf_table_count": len(tables),
             "eligible_table_count": len(usable),
@@ -75,7 +82,8 @@ def shortlist(outline, page_tables, *, max_pages=5, min_rows=2,
         "approved": False,
         "total_candidate_pages": len(candidates),
         "selected_pages": candidates[:max_pages],
-        "selection_basis": "proposed_outline_tables_and_pymupdf_table_shapes",
+        "selection_basis": ("pymupdf_shapes_with_optional_outline_context"
+                            if mode == "all" else "outline_table_pages_and_pymupdf_shapes"),
         "limitations": [
             "Same-page presence is not correspondence; DocLayout-YOLO is not run.",
             "Rows, columns and cell warnings are only structural observations.",
@@ -93,6 +101,8 @@ def main():
     parser.add_argument("--nextcloud-user", default="nina")
     parser.add_argument("--outline-json", type=Path, required=True)
     parser.add_argument("--max-pages", type=int, default=5)
+    parser.add_argument("--mode", choices=("all", "outline"), default="all",
+                        help="all: scan every PDF page; outline: only table-bookmarked pages")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     inputs = [args.outline_json]
@@ -117,7 +127,7 @@ def main():
     if digest != outline["document"]["sha256"]:
         raise ValueError("Source SHA-256 does not match outline JSON")
 
-    target_pages = sorted({
+    outline_pages = sorted({
         e["page_number"] for e in outline["elements"]
         if e["element_type"] == "table"
         and e["review"]["status"] == "proposed"
@@ -126,7 +136,11 @@ def main():
     with pymupdf.open(stream=raw, filetype="pdf") as pdf:
         if pdf.page_count != len(outline["pages"]):
             raise ValueError("Page count mismatch")
+        target_pages = (range(1, pdf.page_count + 1)
+                        if args.mode == "all" else outline_pages)
+        scanned = 0
         for page_number in target_pages:
+            scanned += 1
             if not 1 <= page_number <= pdf.page_count:
                 raise ValueError(f"Bad outline page {page_number}")
             page = pdf[page_number-1]
@@ -142,21 +156,26 @@ def main():
                 })
             page_tables[page_number] = reports
 
-    report = shortlist(outline, page_tables, max_pages=args.max_pages)
+    report = shortlist(outline, page_tables, max_pages=args.max_pages,
+                       mode=args.mode)
     report["source_sha256"] = digest
-    report["scanned_outline_table_pages"] = len(target_pages)
+    report["scanned_outline_table_pages"] = len(outline_pages)
+    report["scanned_pages"] = scanned
+    report["mode"] = args.mode
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8"
     )
-    print("Seiten mit vorgeschlagenen Tabellen-Lesezeichen:", len(target_pages))
+    print("Seiten mit vorgeschlagenen Tabellen-Lesezeichen:", len(outline_pages))
+    print("Tatsächlich geprüfte PDF-Seiten:", scanned)
     print("Kandidatenseiten:", report["total_candidate_pages"])
     for item in report["selected_pages"]:
         shapes = ", ".join(f"{s['rows']}x{s['columns']}" for s in item["shapes"])
         print(f"  PDF-Seite {item['page_number']}: {shapes} | "
               f"{item['eligible_table_count']} PyMuPDF-Tabellen | "
-              f"{len(item['outline_table_anchors'])} Tabellen-Lesezeichen")
+              f"{len(item['outline_table_anchors'])} Tabellen-Lesezeichen "
+              f"| {item['context_status']}")
     print("Nicht freigegebener Kandidatenbericht:", args.out)
 
 

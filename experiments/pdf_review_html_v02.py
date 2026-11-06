@@ -15,6 +15,7 @@ from pathlib import Path
 import struct
 
 from experiments.pdf_structure_v02 import validate_v02
+from experiments.pdf_review_decisions_v02 import inspect_ledger
 
 
 def png_dimensions(raw):
@@ -27,7 +28,8 @@ def png_dimensions(raw):
     return width, height
 
 
-def page_review_data(data, *, page_number, image_name, image_dimensions):
+def page_review_data(data, *, page_number, image_name, image_dimensions,
+                     ledger_current=None):
     """Extract a single page's small subset, never exposing all v0.1 spans."""
     problems = validate_v02(data)
     if problems:
@@ -81,7 +83,13 @@ def page_review_data(data, *, page_number, image_name, image_dimensions):
         copy.deepcopy(x) for x in data["review_decisions"]
         if x["target_id"] in selected
     ]
+    effective = {
+        tid: copy.deepcopy(record)
+        for tid, record in (ledger_current or {}).items()
+        if tid in selected
+    }
     return {
+        "effective_reviews": effective,
         "page_number": page_number,
         "document": base["document"].get("filename") or
                     Path(base["document"]["source_uri"]).name,
@@ -108,11 +116,15 @@ def _escape_script_json(value):
     ).replace("\u2029", "\\u2029")
 
 
-def make_html(data, *, page_number, png_bytes, image_name):
+def make_html(data, *, page_number, png_bytes, image_name,
+              ledger_dir=None):
     dims = png_dimensions(png_bytes)
+    # All ledger records (including records for OTHER pages) are validated
+    # before any status is shown. Never silently ignore an invalid ledger.
+    current = inspect_ledger(data, ledger_dir) if ledger_dir is not None else {}
     review = page_review_data(
         data, page_number=page_number, image_name=image_name,
-        image_dimensions=dims,
+        image_dimensions=dims, ledger_current=current,
     )
     payload = _escape_script_json(review)
     image_uri = "data:image/png;base64," + base64.b64encode(png_bytes).decode("ascii")
@@ -150,7 +162,12 @@ small,.muted{color:#55687a} .summary{display:flex;flex-wrap:wrap;gap:10px}
 button.toggle{border:1px solid #8296a9;border-radius:7px;padding:6px 10px;background:white;cursor:pointer;margin:3px}
 button.toggle[aria-pressed="false"]{opacity:.45}
 .entry{padding:9px;border:1px solid #d9e1e9;border-radius:8px;margin:7px 0}
-.entry strong{overflow-wrap:anywhere} .entry button{background:#f0f5fa;border:0;padding:6px;cursor:pointer;text-align:left;width:100%}
+.entry strong{overflow-wrap:anywhere}
+.review-status{margin:5px 0;font-size:.85rem;font-weight:650}
+.review-status.confirmed{color:#08744f}
+.review-status.rejected{color:#b33429}
+.review-status.proposed{color:#5c6e7d}
+.entry button{background:#f0f5fa;border:0;padding:6px;cursor:pointer;text-align:left;width:100%}
 pre{font-family:ui-monospace,monospace;font-size:.78rem;white-space:pre-wrap;overflow-wrap:anywhere}
 .tablewrap{max-height:320px;overflow:auto;border:1px solid #d8e0e8}
 table{border-collapse:collapse;font-size:.83rem}th,td{border:1px solid #cbd5df;padding:6px;vertical-align:top;white-space:pre-wrap;min-width:50px}
@@ -187,6 +204,19 @@ const el=(tag,content,klass)=>{const x=document.createElement(tag);if(content!==
 const add=(parent,tag,content,klass)=>{const x=el(tag,content,klass);parent.append(x);return x};
 const canvas=document.getElementById('canvas'),selection=document.getElementById('selection');
 const regions=new Map(),buttons=new Map(),visible=new Map();
+const effective=report.effective_reviews||{};
+function showReview(parent,id,proposal){
+ const current=effective[id];
+ const state=current?current.status:proposal;
+ add(parent,'div','Review: '+state+(current?' (Ledger, explizit entschieden)':' (Vorschlag, noch nicht entschieden)'),
+     'review-status '+state);
+ if(current){
+  add(parent,'small','Reviewer: '+current.reviewer+' · '+current.decided_at);
+  add(parent,'div','Begründung: '+current.reason,'muted');
+  add(parent,'small','Entscheidungs-ID: '+current.decision_id);
+ }
+}
+
 for(const r of report.regions){
  const type=r.region_kind;
  const b=r.bbox_pt, [w,h]=report.page_size_pt;
@@ -218,6 +248,7 @@ function selectRegion(id){
  const r=regions.get(id);if(!r)return;
  for(const [key,button] of buttons)button.classList.toggle('selected',key===id);
  selection.replaceChildren();
+ showReview(selection,id,r.review.status);
  add(selection,'pre',JSON.stringify({
   id:r.region_id,typ:r.region_kind,seite:r.page_number,
   bbox_pt:r.bbox_pt,evidence:r.evidence,review:r.review
@@ -227,7 +258,9 @@ function selectRegion(id){
 }
 for(const l of report.logical_elements){
  const block=add(document.getElementById('logical'),'div',undefined,'entry');
- add(block,'strong',l.label);add(block,'div','Status: '+l.review.status,'muted');
+ add(block,'strong',l.label);
+ add(block,'small',l.logical_id);
+ showReview(block,l.logical_id,l.review.status);
 }
 for(const r of report.regions.filter(x=>Object.prototype.hasOwnProperty.call(x,'raw_cells'))){
  const block=add(document.getElementById('matrices'),'div',undefined,'entry');
@@ -242,7 +275,8 @@ for(const r of report.relationships){
  const block=add(document.getElementById('relations'),'div',undefined,'entry');
  add(block,'strong',r.relation_type);
  add(block,'div',r.from_id+' → '+r.to_id);
- add(block,'small','Status: '+r.review.status+(r.review.reason?' · '+r.review.reason:''));
+ add(block,'small',r.relation_id+(r.review.reason?' · '+r.review.reason:''));
+ showReview(block,r.relation_id,r.review.status);
 }
 if(report.relationships.length===0)add(document.getElementById('relations'),'p','Keine Beziehungen','muted');
 for(const d of report.review_decisions){
@@ -251,7 +285,14 @@ for(const d of report.review_decisions){
  add(block,'div',d.reviewer+' · '+d.decided_at);
  add(block,'small',d.reason);
 }
-if(report.review_decisions.length===0)add(document.getElementById('decisions'),'p','Noch keine Entscheidungen','muted');
+for(const d of Object.values(effective)){
+ const block=add(document.getElementById('decisions'),'div',undefined,'entry');
+ add(block,'strong',d.status+' · '+d.target_id);
+ add(block,'div','Reviewer: '+d.reviewer+' · '+d.decided_at);
+ add(block,'small',d.reason+' · '+d.decision_id);
+}
+if(report.review_decisions.length===0&&Object.keys(effective).length===0)
+ add(document.getElementById('decisions'),'p','Noch keine Entscheidungen (oder kein Ledger angegeben)','muted');
 </script>
 </body></html>
 """
@@ -264,16 +305,21 @@ def main():
     parser.add_argument("--image",required=True,type=Path,
                         help="Original unannotated PNG of the selected PDF page")
     parser.add_argument("--out",required=True,type=Path)
+    parser.add_argument("--ledger-dir",type=Path,default=None,
+                        help="Optional existing decision ledger (read-only)")
     args=parser.parse_args()
     if args.out.resolve() in {args.v02_json.resolve(),args.image.resolve()}:
         parser.error("Output must not overwrite input")
     data=json.loads(args.v02_json.read_text(encoding="utf-8"))
     rendered=make_html(data,page_number=args.page,
-                       png_bytes=args.image.read_bytes(),image_name=args.image.name)
+                       png_bytes=args.image.read_bytes(),image_name=args.image.name,
+                       ledger_dir=args.ledger_dir)
     args.out.parent.mkdir(parents=True,exist_ok=True)
     args.out.write_text(rendered,encoding="utf-8")
     print("Lokale HTML-Review-Vorschau erstellt:",args.out)
     print("Nur Anzeige; keine Freigabe, keine Nextcloud-/DB-Schreibzugriffe")
+    if args.ledger_dir is not None:
+        print("Ledger geprüft und nur lesend eingebettet:", args.ledger_dir)
 
 
 if __name__=="__main__":

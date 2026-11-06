@@ -81,6 +81,11 @@ class CompositionServerTests(unittest.TestCase):
         self.assertIn("source row", markup)
         self.assertIn("Tabellenentscheidung verbindlich speichern", markup)
         self.assertIn("repeated_header", markup)
+        # A Python triple-quoted HTML template must escape JS newlines:
+        # a literal line break inside a JS double-quoted string stops the
+        # whole composition script, leaving the Prepare button inert.
+        self.assertIn(r'NOCH NICHT GESPEICHERT:\n', markup)
+        self.assertNotIn('NOCH NICHT GESPEICHERT:\n', markup)
         self.assertFalse(list(self.compledger.glob("*.json")))
 
     def test_preview_only_then_explicit_commit(self):

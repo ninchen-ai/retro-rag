@@ -21,8 +21,8 @@ import pymupdf
 from experiments.pdf_base_adapter import build_base_structure
 from experiments.validate_pdf_structure import validate
 
-FIGURE = re.compile(r"^(?:figure|fig\.?)\s+\d+(?:[-.]\d+)*(?:\s*[:.]\s*|\s+|$)", re.I)
-TABLE = re.compile(r"^table\s+\d+(?:[-.]\d+)*(?:\s*[:.]\s*|\s+|$)", re.I)
+FIGURE = re.compile(r"^(?:figure|fig\.?)\s+\d+(?:[-.\u2013\u2014]\d+)*(?:\s*[:.]\s*|\s+|$)", re.I)
+TABLE = re.compile(r"^table\s+\d+(?:[-.\u2013\u2014]\d+)*(?:\s*[:.]\s*|\s+|$)", re.I)
 NAV = re.compile(
     r"^(?:start|title page|copyright page|contents|table of contents|"
     r"list of figures|figures|list of tables|tables|index|"
@@ -45,11 +45,37 @@ def classify_outline_title(title: str) -> str:
     return "heading"
 
 
+# Unicode glyph mapping is a *search-only* transformation. Some EHCI
+# bookmarks encode the visible long bar as U+F0BE while PyMuPDF extracts
+# U+F8E7 from the page's custom font (both private-use characters).
+# Preserve title, original PDF text, and all source spans byte-for-byte.
+_SEARCH_DASHES = "\\u002d\\u2010\\u2011\\u2012\\u2013\\u2014\\u2015\\uf0be\\uf8e7"
+
+
+def _dash_fold(value):
+    """Canonical comparison string; never write it back into source text."""
+    return "".join("-" if c in _SEARCH_DASHES else c for c in value)
+
+
 def _variants(title):
-    variants = [title]
+    """Conservative exact-title variants for PDF text matching.
+
+    We avoid blanket Unicode stripping: punctuation such as [0:6], / and
+    minus signs inside register identifiers must remain distinguishable.
+    """
+    initial = [title]
     match = ROOT_NUMBER_AT_END.fullmatch(title.strip())
     if match:
-        variants.append(match.group(2) + " " + match.group(1))
+        initial.append(match.group(2) + " " + match.group(1))
+    variants = []
+    for item in initial:
+        for variant in (
+            item,
+            item.replace("\\uf0be", "\\uf8e7"),
+            item.replace("\\uf8e7", "\\uf0be"),
+        ):
+            if variant not in variants:
+                variants.append(variant)
     return variants
 
 
@@ -127,9 +153,11 @@ def _group_heading_rectangles(rects):
 def _candidate_anchor(page, title, destination, max_gap_pt=15):
     """Find a candidate title footprint, preserving ambiguous occurrences."""
     rects = []
+    selected_variant = None
     for variant in _variants(title):
         rects = [r for r in page.search_for(variant) if _valid_bbox(r, page)]
         if rects:
+            selected_variant = variant
             break
     if not rects:
         return None, "TEXT_NOT_LOCATED", []
@@ -162,7 +190,9 @@ def _candidate_anchor(page, title, destination, max_gap_pt=15):
         min(r.x0 for r in chosen), min(r.y0 for r in chosen),
         max(r.x1 for r in chosen), max(r.y1 for r in chosen)
     ]
-    details = [f"rectangles={len(rects)}", f"occurrences={len(groups)}"]
+    details = [f"rectangles={len(rects)}", f"occurrences={len(groups)}",
+               "search_variant=private_use_dash" if selected_variant != title
+               else "search_variant=exact"]
     details.append(f"delta_y_pt={delta:.2f}" if delta is not None else "target=unavailable")
     return rect, status, details
 

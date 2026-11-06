@@ -11,6 +11,7 @@ import math
 from pathlib import Path
 
 from experiments.pdf_table_quality_review import bbox_iou
+from experiments.pdf_layout_joint_review import pixel_box_to_pdf
 
 
 def _fraction_of_smaller(a, b):
@@ -135,6 +136,8 @@ def main():
     parser.add_argument("--quality-json", type=Path, required=True)
     parser.add_argument("--layout-json", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--page-width-pt", type=float, required=True)
+    parser.add_argument("--page-height-pt", type=float, required=True)
     args = parser.parse_args()
     if args.out.resolve() in {args.quality_json.resolve(),
                               args.layout_json.resolve()}:
@@ -146,14 +149,38 @@ def main():
     width, height = quality["image_size_pixels"]
     if width <= 0 or height <= 0:
         parser.error("Bad image dimensions")
-    # Existing quality-report detector boxes already in PDF coordinates,
-    # but only 'table' entries are stored. For all classes convert directly
-    # using the SAME PDF page size inferred from source detector/PDF boxes?
-    # Require caller-supplied page dimensions to avoid guessing geometry.
-    parser.error(
-        "Full-class PDF coordinates required. Use --page-width-pt and "
-        "--page-height-pt (see updated CLI options)."
+    page_width = args.page_width_pt
+    page_height = args.page_height_pt
+    if page_width <= 0 or page_height <= 0:
+        parser.error("Page dimensions must be positive")
+    regions = []
+    for index, detection in enumerate(layout["detections"]):
+        box = pixel_box_to_pdf(
+            detection["bbox_pixels"], page_width, page_height, width, height
+        )
+        regions.append({
+            "source_detection_index": index,
+            "class_name": detection["class_name"],
+            "confidence": detection.get("confidence"),
+            "bbox_pdf_points": [round(value, 3) for value in box],
+        })
+    report = review_conflicts(regions, quality["pymupdf_tables"])
+    report.update({
+        "page_number": quality["page_number"],
+        "source_image": quality["source_image"],
+        "document_sha256": quality["document_sha256"],
+        "page_size_pt": [page_width, page_height],
+    })
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8"
     )
+    print("Review-Hinweise:", len(report["review_findings"]))
+    for finding in report["review_findings"]:
+        print(finding["code"], finding["detector_region_indices"],
+              finding["measurements"])
+    print("Keine automatische Zusammenführung oder Freigabe:", args.out)
 
 
 if __name__ == "__main__":

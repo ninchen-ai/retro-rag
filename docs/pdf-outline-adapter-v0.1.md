@@ -132,3 +132,16 @@ separaten Textzeile vor der Überschrift.
 
 Diese Änderung ist ein konservativer Strukturvorschlag, kein Beweis
 der semantischen Zuordnung und keine automatische Freigabe.
+
+## Testfixture-Anpassung
+
+Im synthetisch mit `page.insert_text()` und der PDF-Standardschrift
+gezeichneten Test wird das eingegebene Unicode-Zeichen `U+2022`
+nicht zwangsläufig als identisches Unicode-Zeichen zurück extrahiert;
+PyMuPDF liefert je nach eingebetteter Schrift z. B. `U+00B7`.
+Daher wird beim **Hierarchie-Test** die Glyph-Fundstelle explizit
+simuliert. Ein **separater Geometrietest** prüft, dass nur ein
+Aufzählungszeichen links auf derselben Zeile und nicht ein beliebiges
+Zeichen auf einer anderen Zeile akzeptiert wird.
+Der EHCI-Echtdokumenttest prüft unabhängig davon die unveränderte
+Suche nach `U+2022` aus dem tatsächlich extrahierten Seitentext.

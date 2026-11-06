@@ -85,3 +85,25 @@ den vollständigen Basistextexport bewahren.
 - Die Seiten- und Textintegrität des Basisadapters bleibt erhalten,
   doch die Struktur und die korrekte semantische Funktion jeder
   Fundstelle erfordern weiteres Review und Regressionstests.
+
+## EHCI-Kodierungsfall (11/2026)
+
+Die tatsächliche PyMuPDF-Extraktion der EHCI-Seiten 18 und 21 lieferte
+`U+F8E7` für den im Druck sichtbaren langen Strich, während die
+PDF-Lesezeichen `U+F0BE` verwenden. Die Suchfunktion probiert deshalb
+zuerst den **unveränderten** Bookmark-Titel und danach eine explizite
+private-use-Zeichenersetzung (`U+F0BE` ↔ `U+F8E7`).
+Nur der **Suchstring** wird geändert; `pages[].text`, `source_spans`
+und `title_or_text` bleiben unverändert. Die Provenienz vermerkt
+`search_variant=private_use_dash`, sofern der Ersatz verwendet wurde.
+Es gibt ausdrücklich **keine allgemeine Entfernung aller Sonderzeichen**.
+
+Die Klassifikation erkennt jetzt auch typografische Trennzeichen in
+Nummern wie `Table 2–3.` (`U+2013`), damit sie nicht als Heading
+eingestuft werden.
+
+Dieser Fix ist derzeit eine überprüfbare Hypothese mit Unit-Tests.
+Der reale EHCI-Durchlauf muss zeigen, welche der 32
+`TEXT_NOT_LOCATED`-Warnungen verschwinden. Die unklaren Listenpunkte
+auf Seite 92 und das isolierte Ellipsenzeichen auf Seite 79 können
+separate Probleme sein.

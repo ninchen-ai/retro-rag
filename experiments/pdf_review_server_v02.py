@@ -19,7 +19,14 @@ import time
 
 from experiments.pdf_review_decisions_v02 import apply, inspect_ledger, propose
 from experiments.pdf_review_html_v02 import make_html
-from experiments.pdf_structure_v02 import validate_v02
+from experiments.pdf_structure_v02 import canonical_sha256, validate_v02
+from experiments.pdf_table_composition_v02 import validate_proposal
+from experiments.pdf_table_composition_review_v02 import (
+    current_decision as current_composition_decision,
+    preview as preview_composition,
+    commit as commit_composition,
+)
+from experiments.pdf_table_composition_html_v02 import composition_panel
 
 MAX_BODY = 4096
 PREVIEW_LIFETIME = 600
@@ -192,17 +199,35 @@ class ReviewServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address, v02_path, page_number, png_path, ledger_dir):
+    def __init__(self, address, v02_path, page_number, png_path, ledger_dir,
+                 composition_path=None, composition_ledger_dir=None):
         if address[0] != "127.0.0.1":
             raise ValueError("For security, the server only binds to 127.0.0.1")
         self.v02_path = Path(v02_path)
         self.png_path = Path(png_path)
         self.ledger_dir = Path(ledger_dir)
         self.page_number = page_number
+        self.composition_path = Path(composition_path) if composition_path else None
+        self.composition_ledger_dir = (
+            Path(composition_ledger_dir) if composition_ledger_dir else None
+        )
+        if (self.composition_path is None) != (self.composition_ledger_dir is None):
+            raise ValueError("Composition proposal and ledger must be configured together")
+        if self.composition_ledger_dir is not None and (
+            not self.composition_ledger_dir.is_dir()
+            or self.composition_ledger_dir.is_symlink()
+        ):
+            raise ValueError("Composition review ledger must exist as a real directory")
         self.secret = secrets.token_urlsafe(32)
         self.pending = {}
         self.pending_lock = threading.Lock()
         super().__init__(address, ReviewHandler)
+
+    def composition(self, v02):
+        if self.composition_path is None:
+            raise ValueError("Composition review is not configured")
+        proposal = json.loads(self.composition_path.read_text(encoding="utf-8"))
+        return validate_proposal(v02, proposal)
 
     def source(self):
         data = json.loads(self.v02_path.read_text(encoding="utf-8"))
@@ -249,6 +274,20 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 ledger_dir=self.server.ledger_dir,
                 secret=self.server.secret,
             )
+            if self.server.composition_path is not None:
+                proposal = self.server.composition(data)
+                if proposal["page_number"] != self.server.page_number:
+                    raise ValueError("Composition proposal is for a different page")
+                current = current_composition_decision(
+                    data, proposal, self.server.composition_ledger_dir
+                )
+                if html.count("</main>") != 1:
+                    raise ValueError("Unexpected HTML markup")
+                html = html.replace(
+                    "</main>",
+                    composition_panel(proposal, current, self.server.secret) +
+                    "\n</main>", 1,
+                )
         except (ValueError, OSError, KeyError) as exc:
             return self._respond(500, {"error": str(exc)})
         self._respond(200, html.encode("utf-8"),
@@ -257,7 +296,10 @@ class ReviewHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._authorized_host():
             return self._respond(403, {"error": "Host rejected"})
-        if self.path not in ("/api/preview", "/api/commit"):
+        if self.path not in (
+            "/api/preview", "/api/commit",
+            "/api/composition/preview", "/api/composition/commit",
+        ):
             return self._respond(404, {"error": "Not found"})
         origin = self.headers.get("Origin")
         if origin not in {
@@ -276,6 +318,78 @@ class ReviewHandler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(size))
             if not isinstance(body, dict):
                 raise ValueError("Expected JSON object")
+            if self.path.startswith("/api/composition/"):
+                required = {
+                    "proposal_id", "status", "reviewer",
+                    "reason", "expected_current",
+                }
+                extra = (
+                    {"preview_token"}
+                    if self.path == "/api/composition/commit" else set()
+                )
+                if set(body) != required | extra:
+                    raise ValueError("Unexpected composition request fields")
+                if any(not isinstance(body[k], str) for k in (
+                    "proposal_id", "status", "reviewer", "reason"
+                )):
+                    raise ValueError("Invalid composition request field types")
+                if len(body["reviewer"]) > 120 or len(body["reason"]) > 1000:
+                    raise ValueError("Reviewer/reason too long")
+                if body["expected_current"] is not None and not isinstance(
+                    body["expected_current"], str
+                ):
+                    raise ValueError("Invalid composition predecessor")
+                v02 = self.server.source()
+                proposal = self.server.composition(v02)
+                if proposal["page_number"] != self.server.page_number:
+                    raise ValueError("Composition belongs to another page")
+                if body["proposal_id"] != proposal["proposal_id"]:
+                    raise ValueError("Wrong composition proposal")
+                arguments = {
+                    key: body[key] for key in (
+                        "status", "reviewer", "reason", "expected_current"
+                    )
+                }
+                if self.path == "/api/composition/preview":
+                    candidate = preview_composition(
+                        v02, proposal, self.server.composition_ledger_dir,
+                        **arguments,
+                    )
+                    token = secrets.token_urlsafe(32)
+                    with self.server.pending_lock:
+                        now = time.monotonic()
+                        self.server.pending = {
+                            k: v for k, v in self.server.pending.items()
+                            if v["expires"] > now
+                        }
+                        self.server.pending[token] = {
+                            "payload": body, "proposal": candidate,
+                            "source_fingerprint": canonical_sha256(proposal),
+                            "expires": now + PREVIEW_LIFETIME,
+                        }
+                    return self._respond(200, {
+                        "proposal": candidate, "preview_token": token
+                    })
+                token = body["preview_token"]
+                if not isinstance(token, str):
+                    raise ValueError("Invalid composition preview token")
+                with self.server.pending_lock:
+                    pending = self.server.pending.pop(token, None)
+                previous_body = {key: body[key] for key in required}
+                if (
+                    pending is None or pending["expires"] < time.monotonic()
+                    or pending["payload"] != previous_body
+                    or pending.get("source_fingerprint") != canonical_sha256(proposal)
+                ):
+                    return self._respond(409, {
+                        "error": "Composition preview stale/invalid; restart review"
+                    })
+                decision = commit_composition(
+                    v02, proposal, self.server.composition_ledger_dir,
+                    expected_proposal_sha256=canonical_sha256(proposal),
+                    **arguments,
+                )
+                return self._respond(200, {"decision": decision})
             required = {"target_id", "status", "reviewer",
                         "reason", "expected_current"}
             extra = {"preview_token"} if self.path == "/api/commit" else set()
@@ -347,6 +461,8 @@ def main():
     parser.add_argument("--image", required=True, type=Path)
     parser.add_argument("--ledger-dir", required=True, type=Path)
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--composition-json", type=Path)
+    parser.add_argument("--composition-ledger-dir", type=Path)
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("Port must be 1-65535")
@@ -357,6 +473,8 @@ def main():
     server = ReviewServer(
         ("127.0.0.1", args.port), args.v02_json, args.page,
         args.image, args.ledger_dir,
+        composition_path=args.composition_json,
+        composition_ledger_dir=args.composition_ledger_dir,
     )
     # Validate all inputs before announcing the server as ready.
     interactive_html(
@@ -364,6 +482,12 @@ def main():
         png_bytes=args.image.read_bytes(), image_name=args.image.name,
         ledger_dir=args.ledger_dir, secret=server.secret,
     )
+    if args.composition_json is not None:
+        server.composition(server.source())
+        current_composition_decision(
+            server.source(), server.composition(server.source()),
+            server.composition_ledger_dir,
+        )
     print(f"PDF Review (nur localhost): http://127.0.0.1:{args.port}/",
           flush=True)
     print("Verwende einen SSH-Tunnel von Iris; keine öffentliche Freigabe.",

@@ -6,7 +6,7 @@ import pymupdf
 
 from experiments.pdf_base_adapter import build_base_structure
 from experiments.pdf_outline_adapter import (
-    add_outline_proposals, classify_outline_title, _group_heading_rectangles,
+    add_outline_proposals, classify_outline_title, _group_heading_rectangles, _variants,
 )
 from experiments.validate_pdf_structure import validate
 
@@ -145,6 +145,31 @@ class PdfOutlineAdapterTests(unittest.TestCase):
             pymupdf.Rect(130, 117, 220, 135),
         ]
         self.assertEqual(len(_group_heading_rectangles(rects)), 2)
+
+    def test_ehci_private_use_dash_search_variants(self):
+        title = "2.1.1 PWRMGT \uf0be PCI Power Management Interface"
+        options = _variants(title)
+        self.assertEqual(options[0], title)
+        self.assertIn(
+            "2.1.1 PWRMGT \uf8e7 PCI Power Management Interface", options
+        )
+        self.assertNotEqual(options[0], options[1])
+        self.assertEqual(title, "2.1.1 PWRMGT \uf0be PCI Power Management Interface")
+
+    def test_en_dash_table_bookmark_is_table(self):
+        self.assertEqual(
+            classify_outline_title(
+                "Table 2\u20133. USBLEGSUP \uf0be USB Legacy Support Extended Capability"
+            ), "table"
+        )
+
+    def test_private_use_dash_does_not_modify_pdf_base_text(self):
+        raw = self.raw
+        base = build_base_structure(raw, source_uri="file:///tmp/ehci-sample.pdf")
+        before = copy.deepcopy(base["pages"])
+        result = add_outline_proposals(raw, base)
+        self.assertEqual(result["pages"], before)
+        self.assertEqual(result["source_spans"], base["source_spans"])
 
     def test_classifier(self):
         self.assertEqual(classify_outline_title("Figure 2-3. PCI Signals"), "figure")

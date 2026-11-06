@@ -77,51 +77,94 @@ def _target_ys(page, destination):
     return [v for v in (y, height-y) if 0 <= v <= height]
 
 
+def _same_heading_fragment_line(a, b):
+    """Fragments of one rendered line may have slightly different glyph boxes."""
+    overlap = min(a.y1, b.y1) - max(a.y0, b.y0)
+    return overlap > 0.65 * min(a.y1 - a.y0, b.y1 - b.y0)
+
+
+def _connected_heading_lines(first, second):
+    """A wrapped title continues just below and at a matching text margin.
+
+    This is a conservative geometric proposal: paragraphs elsewhere on the
+    page must not get absorbed merely because they share an X coordinate.
+    """
+    top = min(r.y0 for r in first)
+    bottom = max(r.y1 for r in first)
+    next_top = min(r.y0 for r in second)
+    h = max(r.y1 - r.y0 for r in first)
+    if not (next_top > top + 0.6 * h and -2.0 <= next_top - bottom <= 4.0):
+        return False
+    # A continuation typically starts where the heading text starts, not
+    # at the separate left-hand section number.
+    return any(abs(a.x0 - b.x0) <= 3.0 for a in first for b in second)
+
+
+def _group_heading_rectangles(rects):
+    """Group split rectangles by line, then tightly wrapped continuation.
+
+    Distant occurrences remain separate, even when the text is identical.
+    """
+    lines = []
+    for rect in sorted(rects, key=lambda r: (r.y0, r.x0)):
+        matches = [line for line in lines if any(
+            _same_heading_fragment_line(rect, existing) for existing in line
+        )]
+        if len(matches) == 1:
+            matches[0].append(rect)
+        else:
+            lines.append([rect])
+    lines.sort(key=lambda line: min(r.y0 for r in line))
+    groups = []
+    for line in lines:
+        if groups and _connected_heading_lines(groups[-1][-1], line):
+            groups[-1].append(line)
+        else:
+            groups.append([line])
+    return [[r for line in group for r in line] for group in groups]
+
+
 def _candidate_anchor(page, title, destination, max_gap_pt=15):
-    """Return a text *anchor* with conservative ambiguity handling."""
-    variants = _variants(title)
+    """Find a candidate title footprint, preserving ambiguous occurrences."""
     rects = []
-    for variant in variants:
+    for variant in _variants(title):
         rects = [r for r in page.search_for(variant) if _valid_bbox(r, page)]
         if rects:
             break
-
     if not rects:
         return None, "TEXT_NOT_LOCATED", []
-    targets = _target_ys(page, destination)
-    if targets:
-        best = min(rects, key=lambda r: min(abs(r.y0-y) for y in targets))
-        delta = min(abs(best.y0-y) for y in targets)
-        position_status = "NEAR_TARGET" if delta <= max_gap_pt else "FAR_FROM_TARGET"
-    else:
-        best = min(rects, key=lambda r: (r.y0, r.x0))
-        delta = None
-        position_status = "NO_USABLE_TARGET"
 
-    # Join rectangles belonging to the same visual line / split word.
-    # Never interpret every rectangle as a separate text occurrence.
-    center = (best.y0 + best.y1) / 2
-    nearby = [
-        r for r in rects
-        if abs((r.y0+r.y1)/2 - center) <= max(3.0, (best.y1-best.y0)*0.45)
-    ]
-    # Multiple *distant vertical lines* with the same searched title are
-    # ambiguous; do not silently claim a unique match.
-    other_lines = [
-        r for r in rects
-        if abs((r.y0+r.y1)/2 - center) > max(3.0, (best.y1-best.y0)*0.45)
-    ]
-    if other_lines:
-        position_status = "MULTIPLE_LINES_" + position_status
+    groups = _group_heading_rectangles(rects)
+    targets = _target_ys(page, destination)
+
+    def gap(group):
+        if not targets:
+            return float("inf")
+        return min(abs(min(r.y0 for r in group) - y) for y in targets)
+
+    if targets:
+        chosen = min(groups, key=gap)
+        delta = gap(chosen)
+        status = "NEAR_TARGET" if delta <= max_gap_pt else "FAR_FROM_TARGET"
+    else:
+        chosen = groups[0]
+        delta = None
+        status = "NO_USABLE_TARGET"
+
+    # In case of distinct occurrences, require a *unique* nearby target.
+    # Avoid treating the wrapped second line as another occurrence.
+    if len(groups) > 1:
+        alternatives = [group for group in groups if group is not chosen]
+        if not targets or any(gap(group) <= max_gap_pt for group in alternatives):
+            status = "MULTIPLE_OCCURRENCES_" + status
 
     rect = [
-        min(r.x0 for r in nearby), min(r.y0 for r in nearby),
-        max(r.x1 for r in nearby), max(r.y1 for r in nearby)
+        min(r.x0 for r in chosen), min(r.y0 for r in chosen),
+        max(r.x1 for r in chosen), max(r.y1 for r in chosen)
     ]
-    return rect, position_status, (
-        [f"rectangles={len(rects)}", f"delta_y_pt={delta:.2f}" if delta is not None else "target=unavailable"]
-    )
-
+    details = [f"rectangles={len(rects)}", f"occurrences={len(groups)}"]
+    details.append(f"delta_y_pt={delta:.2f}" if delta is not None else "target=unavailable")
+    return rect, status, details
 
 def _placeholder(page, destination):
     """Clearly provisional 1-pt marker; never a real text or image box."""

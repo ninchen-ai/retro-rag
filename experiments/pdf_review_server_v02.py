@@ -285,7 +285,13 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     raise ValueError("Unexpected HTML markup")
                 html = html.replace(
                     "</main>",
-                    composition_panel(proposal, current, self.server.secret) +
+                    composition_panel(
+                        proposal, current, self.server.secret,
+                        original_regions={
+                            region["region_id"]: region
+                            for region in data["physical_regions"]
+                        },
+                    ) +
                     "\n</main>", 1,
                 )
         except (ValueError, OSError, KeyError) as exc:

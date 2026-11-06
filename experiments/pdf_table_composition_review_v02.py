@@ -39,8 +39,6 @@ def current_decision(v02, proposal, directory):
             raise ValueError("Composition review ID/filename mismatch")
         if record.get("proposal_id") != validated["proposal_id"]:
             raise ValueError("Unexpected proposal in composition ledger")
-        if record.get("proposal_sha256") != validated["proposal_sha256"] if "proposal_sha256" in validated else False:
-            raise ValueError("Unexpected proposal digest")
         required = {
             "decision_id", "proposal_id", "proposal_sha256", "status",
             "reviewer", "reason", "decided_at", "previous_decision_id",

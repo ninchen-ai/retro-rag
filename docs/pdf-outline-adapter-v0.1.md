@@ -107,3 +107,28 @@ Der reale EHCI-Durchlauf muss zeigen, welche der 32
 `TEXT_NOT_LOCATED`-Warnungen verschwinden. Die unklaren Listenpunkte
 auf Seite 92 und das isolierte Ellipsenzeichen auf Seite 79 können
 separate Probleme sein.
+
+## EHCI-Listenüberschriften (Seite 92)
+
+Die drei Bookmark-Einträge mit Präfix `U+F0B7` bezeichnen
+fett gedruckte, eingerückte **Listenüberschriften**. Der Seitentext
+enthält dagegen das echte Aufzählungszeichen `U+2022` auf einer
+separaten Textzeile vor der Überschrift.
+
+- Ein Bookmark mit führendem `U+F0B7` oder `U+2022` ist zunächst
+  `element_type=list`, nicht automatisch `heading`.
+- Für die Textsuche wird das führende Markerzeichen nur im
+  **Suchstring** entfernt. Der ursprüngliche Bookmark-Titel
+  bleibt unverändert.
+- Der Titel muss auf der Zielseite gefunden werden; zusätzlich sucht
+  der Adapter einen sichtbaren Bullet-Textanker links neben und auf
+  Höhe der Titelzeile. Ohne diesen Beleg bleibt der Fall `unclear`.
+- Listen werden nicht als Elternknoten für nachfolgende Kapitel
+  in den Heading-Stack aufgenommen.
+- Die Box kennzeichnet nur die Titelposition. Die vollständige
+  Listenstruktur und ihre Unterpunkte werden noch nicht extrahiert.
+- Das isolierte Lesezeichen `…` auf EHCI-Seite 79 bleibt
+  ausdrücklich ein mehrdeutiger Review-Fall.
+
+Diese Änderung ist ein konservativer Strukturvorschlag, kein Beweis
+der semantischen Zuordnung und keine automatische Freigabe.

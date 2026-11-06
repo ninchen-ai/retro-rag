@@ -171,6 +171,51 @@ class PdfOutlineAdapterTests(unittest.TestCase):
         self.assertEqual(result["pages"], before)
         self.assertEqual(result["source_spans"], base["source_spans"])
 
+    def test_bullet_outline_is_list_not_section_parent(self):
+        doc = pymupdf.open()
+        page = doc.new_page(width=612, height=792)
+        page.insert_text((72, 100), "1. Topic", fontsize=13)
+        page.insert_text((72, 150), "•", fontsize=12)
+        page.insert_text((90, 150), "Interrupt Transfer Pre-condition Criteria", fontsize=12)
+        page.insert_text((72, 200), "1.1 Following section", fontsize=12)
+        doc.set_toc([
+            [1, "1. Topic", 1],
+            [2, "\uf0b7 Interrupt Transfer Pre-condition Criteria", 1],
+            [2, "1.1 Following section", 1],
+        ])
+        raw = doc.tobytes()
+        doc.close()
+        base = build_base_structure(raw, source_uri="file:///tmp/list.pdf")
+        result = add_outline_proposals(raw, base)
+        self.assertEqual(validate(result), [])
+        self.assertEqual([e["element_type"] for e in result["elements"]],
+                         ["heading", "list", "heading"])
+        self.assertEqual(result["elements"][1]["parent_id"], "outline-00001")
+        self.assertEqual(result["elements"][2]["parent_id"], "outline-00001")
+        self.assertIn("list_bullet=near_title",
+                      result["elements"][1]["provenance"][0]["evidence"])
+        self.assertEqual(result["pages"], base["pages"])
+
+    def test_missing_visible_bullet_stays_unclear(self):
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.insert_text((90, 150), "Interrupt Transfer Pre-condition Criteria", fontsize=12)
+        doc.set_toc([[1, "\uf0b7 Interrupt Transfer Pre-condition Criteria", 1]])
+        raw = doc.tobytes()
+        doc.close()
+        base = build_base_structure(raw, source_uri="file:///tmp/no-bullet.pdf")
+        result = add_outline_proposals(raw, base)
+        self.assertEqual(result["elements"][0]["element_type"], "list")
+        self.assertEqual(result["elements"][0]["review"]["status"], "unclear")
+        self.assertIn("BULLET_NOT_LOCATED",
+                      result["elements"][0]["provenance"][0]["evidence"])
+
+    def test_ehci_bullet_is_list_candidate(self):
+        self.assertEqual(
+            classify_outline_title("\uf0b7 Transfer Type Independent Pre-operations"),
+            "list"
+        )
+
     def test_classifier(self):
         self.assertEqual(classify_outline_title("Figure 2-3. PCI Signals"), "figure")
         self.assertEqual(classify_outline_title("Table 2-4. Registers"), "table")

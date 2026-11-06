@@ -97,7 +97,23 @@ REVIEW_JS = r"""
   btn.addEventListener('click',()=>choose(btn.title.split(' · ')[0]));
  });
  // Dedicated choices make the logical objects and relations selectable too.
- // Dropdown allows independent selection of logical objects and relations.
+ // Direct actions next to the existing logical-element and relation panels.
+ for(const [index,obj] of report.logical_elements.entries()){
+  const entry=document.querySelectorAll('#logical .entry')[index];
+  if(!entry)continue;
+  const button=document.createElement('button');
+  button.type='button';button.textContent='Dieses Element prüfen';
+  button.addEventListener('click',()=>choose(obj.logical_id));
+  entry.append(button);
+ }
+ for(const [index,obj] of report.relationships.entries()){
+  const entry=document.querySelectorAll('#relations .entry')[index];
+  if(!entry)continue;
+  const button=document.createElement('button');
+  button.type='button';button.textContent='Diese Beziehung prüfen';
+  button.addEventListener('click',()=>choose(obj.relation_id));
+  entry.append(button);
+ }
  async function request(path,body){
   const res=await fetch(path,{
    method:'POST',credentials:'same-origin',cache:'no-store',

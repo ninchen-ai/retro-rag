@@ -49,14 +49,6 @@ def classify_outline_title(title: str) -> str:
 # bookmarks encode the visible long bar as U+F0BE while PyMuPDF extracts
 # U+F8E7 from the page's custom font (both private-use characters).
 # Preserve title, original PDF text, and all source spans byte-for-byte.
-_SEARCH_DASHES = "\\u002d\\u2010\\u2011\\u2012\\u2013\\u2014\\u2015\\uf0be\\uf8e7"
-
-
-def _dash_fold(value):
-    """Canonical comparison string; never write it back into source text."""
-    return "".join("-" if c in _SEARCH_DASHES else c for c in value)
-
-
 def _variants(title):
     """Conservative exact-title variants for PDF text matching.
 
@@ -71,8 +63,8 @@ def _variants(title):
     for item in initial:
         for variant in (
             item,
-            item.replace("\\uf0be", "\\uf8e7"),
-            item.replace("\\uf8e7", "\\uf0be"),
+            item.replace("\uf0be", "\uf8e7"),
+            item.replace("\uf8e7", "\uf0be"),
         ):
             if variant not in variants:
                 variants.append(variant)

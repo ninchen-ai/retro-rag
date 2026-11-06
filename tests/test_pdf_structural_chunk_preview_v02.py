@@ -100,10 +100,21 @@ class PdfStructuralPreviewTests(unittest.TestCase):
             preview(self.v02, selected_heading_ids=["test-heading-1"])
 
     def test_rejected_heading_cannot_be_selected(self):
-        self.v02["source_v01"]["elements"][0]["review"]["status"] = "rejected"
+        self.v02["source_v01"]["elements"][0]["review"] = {
+            "status": "rejected",
+            "reviewer": "test-reviewer",
+            "reason": "Rejected heading in test fixture",
+        }
         from experiments.pdf_structure_v02 import canonical_sha256
         self.v02["source_v01_sha256"] = canonical_sha256(self.v02["source_v01"])
         with self.assertRaisesRegex(ValueError, "Rejected"):
+            preview(self.v02, selected_heading_ids=["test-heading-1"])
+
+    def test_incomplete_review_metadata_is_rejected(self):
+        self.v02["source_v01"]["elements"][0]["review"]["status"] = "rejected"
+        from experiments.pdf_structure_v02 import canonical_sha256
+        self.v02["source_v01_sha256"] = canonical_sha256(self.v02["source_v01"])
+        with self.assertRaisesRegex(ValueError, "decision lacks reviewer"):
             preview(self.v02, selected_heading_ids=["test-heading-1"])
 
     def test_invalid_snapshot_is_rejected(self):

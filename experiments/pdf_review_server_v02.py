@@ -97,10 +97,7 @@ REVIEW_JS = r"""
   btn.addEventListener('click',()=>choose(btn.title.split(' · ')[0]));
  });
  // Dedicated choices make the logical objects and relations selectable too.
- for(const obj of objects){
-  const container=obj.id.startsWith('!')?null:null;
-  // Review-object dropdown is the authoritative selection control.
- }
+ // Dropdown allows independent selection of logical objects and relations.
  async function request(path,body){
   const res=await fetch(path,{
    method:'POST',credentials:'same-origin',cache:'no-store',
@@ -306,6 +303,13 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 return self._respond(
                     409, {"error": "No valid matching preview; please restart"}
                 )
+            # Reject changed PDF snapshots and changed target objects even if
+            # their review history is still empty. A fresh preview is required.
+            refreshed = propose(v02, self.server.ledger_dir, **arguments)
+            for field in ("document_sha256", "source_v01_sha256",
+                          "target_id", "target_sha256"):
+                if refreshed[field] != pending["proposal"][field]:
+                    raise ValueError("Source/target changed since preview")
             # Explicit action only. apply() locks and re-checks the current
             # head before creating an independent immutable JSON record.
             record = apply(v02, self.server.ledger_dir, **arguments)

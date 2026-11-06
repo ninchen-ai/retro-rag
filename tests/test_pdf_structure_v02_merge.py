@@ -9,7 +9,7 @@ from experiments.pdf_structure_v02 import (
 )
 from experiments.pdf_structure_v02_assemble import assemble
 from experiments.pdf_structure_v02_merge import merge_v02
-from tests.test_pdf_structure_v02 import synthetic_reports
+from test_pdf_structure_v02 import synthetic_reports
 
 EXAMPLE = (
     Path(__file__).resolve().parents[1] /
@@ -86,9 +86,9 @@ class PdfStructureV02MergeTests(unittest.TestCase):
 
     def test_duplicate_ids_across_pages_refused(self):
         other = copy.deepcopy(self.b)
-        other["physical_regions"][0]["region_id"] = (
-            self.a["physical_regions"][0]["region_id"]
-        )
+        item = copy.deepcopy(other["logical_elements"][0])
+        item["logical_id"] = self.a["logical_elements"][0]["logical_id"]
+        other["logical_elements"].append(item)
         # Inputs remain individually valid; merged IDs must be disjoint.
         self.assertEqual(validate_v02(other), [])
         with self.assertRaisesRegex(ValueError, "Duplicate ID"):

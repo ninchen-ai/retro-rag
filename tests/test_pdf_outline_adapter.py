@@ -5,7 +5,9 @@ import unittest
 import pymupdf
 
 from experiments.pdf_base_adapter import build_base_structure
-from experiments.pdf_outline_adapter import add_outline_proposals, classify_outline_title
+from experiments.pdf_outline_adapter import (
+    add_outline_proposals, classify_outline_title, _group_heading_rectangles,
+)
 from experiments.validate_pdf_structure import validate
 
 
@@ -107,6 +109,42 @@ class PdfOutlineAdapterTests(unittest.TestCase):
         self.assertNotEqual(result["elements"][0]["element_id"],
                             result["elements"][1]["element_id"])
         self.assertEqual(result["pages"], base["pages"])
+
+    def test_wrapped_heading_page46_is_one_occurrence(self):
+        # Actual rects from Intel 875P PDF page 46.
+        rects = [
+            pymupdf.Rect(72.00, 94.16, 94.17, 111.97),
+            pymupdf.Rect(137.01, 94.16, 473.78, 111.97),
+            pymupdf.Rect(137.04, 111.20, 289.94, 129.01),
+        ]
+        groups = _group_heading_rectangles(rects)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(len(groups[0]), 3)
+
+    def test_wrapped_heading_page55_is_one_occurrence(self):
+        # Actual rects from Intel 875P PDF page 55.
+        rects = [
+            pymupdf.Rect(80.04, 94.68, 118.94, 110.22),
+            pymupdf.Rect(144.92, 94.68, 490.24, 110.22),
+            pymupdf.Rect(144.96, 109.68, 211.04, 125.22),
+        ]
+        groups = _group_heading_rectangles(rects)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(len(groups[0]), 3)
+
+    def test_separate_repeated_titles_remain_two_occurrences(self):
+        rects = [
+            pymupdf.Rect(137, 94, 250, 112),
+            pymupdf.Rect(137, 190, 250, 208),
+        ]
+        self.assertEqual(len(_group_heading_rectangles(rects)), 2)
+
+    def test_nearby_but_misaligned_labels_remain_separate(self):
+        rects = [
+            pymupdf.Rect(100, 100, 250, 118),
+            pymupdf.Rect(130, 117, 220, 135),
+        ]
+        self.assertEqual(len(_group_heading_rectangles(rects)), 2)
 
     def test_classifier(self):
         self.assertEqual(classify_outline_title("Figure 2-3. PCI Signals"), "figure")

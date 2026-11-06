@@ -12,10 +12,64 @@ import copy
 import json
 from pathlib import Path
 
+from collections import Counter
 from experiments.pdf_review_decisions_v02 import inspect_ledger
+from experiments.pdf_outline_adapter import _variants
+from scripts.pdf_heading_alignment import align_page_headings
+from scripts.pdf_heading_review import ReviewHeading
 from experiments.pdf_structural_chunk_preview_v02 import preview as preview_text
 from experiments.pdf_table_composition_v02 import validate_proposal
 from experiments.pdf_table_composition_review_v02 import current_decision
+
+
+def heading_alignment_audit(v02):
+    """Reuse existing heading aligner on the EXACT v0.1 text profile.
+
+    This is diagnostics only; anchors remain proposed and are never installed
+    in the indexing manifest automatically.
+    """
+    source = v02["source_v01"]
+    pages = {p["page_number"]: p["text"] for p in source["pages"]}
+    out = []
+    for element in source["elements"]:
+        if element["element_type"] != "heading":
+            continue
+        page_no = element["page_number"]
+        attempts = []
+        for title in _variants(element["title_or_text"]):
+            probe = ReviewHeading(
+                page_no, 1, title, "pdf_outline", None, "REVIEW REQUIRED",
+            )
+            candidate = align_page_headings(pages[page_no], [probe])[0]
+            attempts.append(candidate)
+        matches = [a for a in attempts if a.status.startswith("MATCHED")]
+        # Multiple successful variants at different lines -> ambiguity.
+        unique_positions = {m.start_line for m in matches}
+        if len(unique_positions) > 1:
+            state, line = "AMBIGUOUS", None
+        elif len(unique_positions) == 1:
+            match = next(m for m in matches if m.start_line in unique_positions)
+            state, line = match.status, match.start_line
+        elif any(a.status == "AMBIGUOUS" for a in attempts):
+            state, line = "AMBIGUOUS", None
+        else:
+            state, line = "UNMATCHED", None
+        out.append({
+            "element_id": element["element_id"],
+            "page_number": page_no,
+            "title": element["title_or_text"],
+            "alignment_status": state,
+            "start_line": line,
+            "boundary_approved": False,
+        })
+    counts = Counter(r["alignment_status"] for r in out)
+    return {
+        "source_profile": "source_v01.pages[].text",
+        "headings_total": len(out),
+        "status_counts": dict(sorted(counts.items())),
+        "headings": out,
+        "any_boundaries_approved": False,
+    }
 
 
 def build_manifest(
@@ -30,6 +84,7 @@ def build_manifest(
     NOT_INDEXABLE_PENDING_DEDUP until a verified content-span exclusion
     plan exists. No text-to-table matching is assumed from coordinates.
     """
+    heading_audit = heading_alignment_audit(v02)
     text = preview_text(
         v02, selected_heading_ids=selected_heading_ids, max_chars=max_chars,
     )
@@ -144,6 +199,7 @@ def build_manifest(
         "document_sha256": text["document_sha256"],
         "source_v01_sha256": text["source_v01_sha256"],
         "text_chunk_count": len(text["chunks"]),
+        "heading_alignment_audit": heading_audit,
         "table_unit_count": 1,
         "table_page": page,
         "table_composition_decision_status": decision_status,
@@ -188,6 +244,8 @@ def main():
         encoding="utf-8",
     )
     print("Text chunks:", output["text_chunk_count"])
+    print("Outline heading alignment:",
+          output["heading_alignment_audit"]["status_counts"])
     print("Table composition:", output["table_composition_decision_status"])
     print("Table units:", output["table_unit_count"])
     print("Blockers:", ", ".join(b["code"] for b in output["blockers"]))

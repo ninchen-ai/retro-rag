@@ -1,0 +1,78 @@
+{
+  "schema_version": "0.1",
+  "document": {
+    "document_id": "pdf-test-001",
+    "source_uri": "nextcloud://Retro-Computing/test.pdf",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "page_count": 2,
+    "filename": "test.pdf"
+  },
+  "pages": [
+    {
+      "page_number": 1,
+      "width_pt": 612,
+      "height_pt": 792,
+      "rotation": 0,
+      "text": "Heading\nSource text\n",
+      "text_extraction": "pymupdf-text"
+    },
+    {
+      "page_number": 2,
+      "width_pt": 612,
+      "height_pt": 792,
+      "rotation": 0,
+      "text": "",
+      "text_extraction": "pymupdf-text"
+    }
+  ],
+  "source_spans": [
+    {
+      "span_id": "s1",
+      "page_number": 1,
+      "text": "Heading",
+      "bbox_pt": [
+        50,
+        60,
+        120,
+        75
+      ],
+      "reading_order": 0,
+      "source": "pymupdf"
+    }
+  ],
+  "elements": [
+    {
+      "element_id": "e1",
+      "element_type": "heading",
+      "page_number": 1,
+      "bbox_pt": [
+        50,
+        60,
+        120,
+        75
+      ],
+      "title_or_text": "Heading",
+      "source_span_ids": [
+        "s1"
+      ],
+      "parent_id": null,
+      "provenance": [
+        {
+          "method": "text_layout",
+          "evidence": "Sample position and text"
+        }
+      ],
+      "review": {
+        "status": "proposed"
+      }
+    }
+  ],
+  "relationships": [],
+  "quality": {
+    "review_status": "unreviewed",
+    "text_integrity_checked": false,
+    "warnings": [
+      "Example only; not a complete extraction"
+    ]
+  }
+}

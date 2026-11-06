@@ -27,7 +27,7 @@ class CandidateScoutTests(unittest.TestCase):
         data = {"elements": [anchor(2), anchor(3), anchor(4, "heading")]}
         page_tables = {2: [table()], 3: [], 4: [table()]}
         saved = copy.deepcopy((data, page_tables))
-        report = shortlist(data, page_tables)
+        report = shortlist(data, page_tables, mode="outline")
         self.assertEqual((data, page_tables), saved)
         self.assertEqual([p["page_number"] for p in report["selected_pages"]], [2])
         self.assertFalse(report["approved"])
@@ -35,7 +35,7 @@ class CandidateScoutTests(unittest.TestCase):
     def test_rejected_or_unclear_outline_is_excluded(self):
         report = shortlist(
             {"elements": [anchor(2, status="unclear")]},
-            {2: [table()]},
+            {2: [table()]}, mode="outline",
         )
         self.assertEqual(report["selected_pages"], [])
 
@@ -44,21 +44,21 @@ class CandidateScoutTests(unittest.TestCase):
         report = shortlist(data, {
             2: [table(rows=7, cols=2)],
             3: [table(rows=3, cols=2), table(rows=6, cols=4)],
-        }, max_pages=1)
+        }, max_pages=1, mode="outline")
         self.assertEqual(report["selected_pages"][0]["page_number"], 3)
         self.assertEqual(report["total_candidate_pages"], 2)
 
     def test_short_table_excluded(self):
         report = shortlist(
             {"elements": [anchor(2)]},
-            {2: [table(rows=1)]},
+            {2: [table(rows=1)]}, mode="outline",
         )
         self.assertEqual(report["selected_pages"], [])
 
     def test_nonempty_cells_do_not_imply_approval(self):
         report = shortlist(
             {"elements": [anchor(2)]},
-            {2: [table()]},
+            {2: [table()]}, mode="outline",
         )
         entry = report["selected_pages"][0]
         self.assertEqual(entry["table_summaries"][0]["cell_warnings"], [])
@@ -68,11 +68,40 @@ class CandidateScoutTests(unittest.TestCase):
     def test_empty_cell_kept_as_warning(self):
         broken = table()
         broken["cells"][1][0] = None
-        report = shortlist({"elements": [anchor(2)]}, {2: [broken]})
+        report = shortlist({"elements": [anchor(2)]}, {2: [broken]}, mode="outline")
         self.assertIn(
             "EMPTY_CELL_R2_C1",
             report["selected_pages"][0]["table_summaries"][0]["cell_warnings"]
         )
+
+    def test_no_outline_tables_still_selects_table_pages(self):
+        data = {"elements": [anchor(2, kind="heading")]}
+        report = shortlist(data, {2: [table(rows=4, cols=3)]})
+        self.assertEqual(report["total_candidate_pages"], 1)
+        entry = report["selected_pages"][0]
+        self.assertEqual(entry["page_number"], 2)
+        self.assertEqual(entry["outline_table_anchors"], [])
+        self.assertEqual(entry["context_status"], "NO_TABLE_BOOKMARK")
+        self.assertFalse(entry["approved"])
+
+    def test_default_scans_other_pages_without_matching_bookmark(self):
+        report = shortlist(
+            {"elements": [anchor(2)]},
+            {2: [table(rows=2, cols=2)], 4: [table(rows=8, cols=4)]},
+        )
+        self.assertEqual(report["total_candidate_pages"], 2)
+        self.assertEqual(report["selected_pages"][0]["page_number"], 4)
+
+    def test_outline_only_preserves_original_filter(self):
+        report = shortlist(
+            {"elements": [anchor(2)]},
+            {2: [table()], 4: [table()]}, mode="outline",
+        )
+        self.assertEqual([x["page_number"] for x in report["selected_pages"]], [2])
+
+    def test_invalid_mode_rejected(self):
+        with self.assertRaisesRegex(ValueError, "mode"):
+            shortlist({"elements": []}, {}, mode="invalid")
 
     def test_bad_limit_rejected(self):
         with self.assertRaises(ValueError):

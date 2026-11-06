@@ -30,11 +30,14 @@ NAV = re.compile(
     r"bibliography|references|glossary)$", re.I
 )
 ROOT_NUMBER_AT_END = re.compile(r"^(.+?)\s+([1-9]\d?)$")
+OUTLINE_BULLET = re.compile(r"^\s*[\uf0b7\u2022]\s*(\S.*)$")
 
 
 def classify_outline_title(title: str) -> str:
     """Conservative classification; uncertainty is an ordinary review case."""
     name = title.strip()
+    if OUTLINE_BULLET.match(name):
+        return "list"
     if FIGURE.match(name):
         return "figure"
     if TABLE.match(name):
@@ -142,11 +145,30 @@ def _group_heading_rectangles(rects):
     return [[r for line in group for r in line] for group in groups]
 
 
+def _find_list_bullet(page, title_rect):
+    """Find a visible bullet immediately left of the matched title line.
+
+    The bullet glyph is separate from the text in some PDFs. A bullet
+    elsewhere on the page is insufficient evidence.
+    """
+    bullets = [
+        r for r in page.search_for("•")
+        if _valid_bbox(r, page)
+        and r.x1 <= title_rect[0] + 2
+        and 0 <= title_rect[0] - r.x1 <= 50
+        and min(r.y1, title_rect[3]) - max(r.y0, title_rect[1])
+            >= 0.35 * min(r.height, title_rect[3] - title_rect[1])
+    ]
+    return min(bullets, key=lambda r: title_rect[0] - r.x1) if bullets else None
+
+
 def _candidate_anchor(page, title, destination, max_gap_pt=15):
     """Find a candidate title footprint, preserving ambiguous occurrences."""
+    bullet_list = OUTLINE_BULLET.match(title)
+    lookup_title = bullet_list.group(1) if bullet_list else title
     rects = []
     selected_variant = None
-    for variant in _variants(title):
+    for variant in _variants(lookup_title):
         rects = [r for r in page.search_for(variant) if _valid_bbox(r, page)]
         if rects:
             selected_variant = variant
@@ -183,8 +205,15 @@ def _candidate_anchor(page, title, destination, max_gap_pt=15):
         max(r.x1 for r in chosen), max(r.y1 for r in chosen)
     ]
     details = [f"rectangles={len(rects)}", f"occurrences={len(groups)}",
-               "search_variant=private_use_dash" if selected_variant != title
+               "search_variant=private_use_dash" if selected_variant != lookup_title
                else "search_variant=exact"]
+    if bullet_list:
+        # Do not turn a plain title into a list just because its outline
+        # bookmark happens to contain a bullet. Verify the page marker.
+        bullet = _find_list_bullet(page, rect)
+        details.append("list_bullet=near_title" if bullet else "list_bullet=not_found")
+        if bullet is None:
+            status = "BULLET_NOT_LOCATED_" + status
     details.append(f"delta_y_pt={delta:.2f}" if delta is not None else "target=unavailable")
     return rect, status, details
 

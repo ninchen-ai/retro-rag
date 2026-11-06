@@ -3,12 +3,14 @@ import copy
 import json
 from pathlib import Path
 import struct
+import tempfile
 import unittest
 
 from experiments.pdf_review_html_v02 import (
     make_html, page_review_data, png_dimensions,
 )
 from experiments.pdf_structure_v02_assemble import assemble
+from experiments.pdf_review_decisions_v02 import apply
 from test_pdf_structure_v02 import synthetic_reports
 
 BASE = (Path(__file__).resolve().parents[1]
@@ -105,6 +107,63 @@ class PdfReviewHtmlV02Tests(unittest.TestCase):
                                   image_dimensions=(612, 792))
         self.assertEqual(result["review_decisions"], [])
         self.assertEqual(self.data["review_decisions"], [])
+
+    def test_ledger_effective_status_after_explicit_decision(self):
+        before = copy.deepcopy(self.data)
+        target = self.data["logical_elements"][0]["logical_id"]
+        with tempfile.TemporaryDirectory() as tmp:
+            decision = apply(
+                self.data, Path(tmp) / "ledger",
+                target_id=target, status="confirmed", reviewer="nina",
+                reason="Originalseite geprüft",
+            )
+            markup = make_html(
+                self.data, page_number=1, png_bytes=dummy_png(),
+                image_name="page1.png", ledger_dir=Path(tmp) / "ledger",
+            )
+        self.assertIn(decision["decision_id"], markup)
+        self.assertIn('"effective_reviews"', markup)
+        self.assertIn('"status":"confirmed"', markup)
+        self.assertEqual(self.data, before)
+        self.assertEqual(self.data["logical_elements"][0]["review"]["status"],
+                         "proposed")
+
+    def test_without_ledger_never_implies_confirmation(self):
+        markup = make_html(
+            self.data, page_number=1, png_bytes=dummy_png(),
+            image_name="page1.png",
+        )
+        self.assertIn('"effective_reviews":{}', markup)
+        self.assertNotIn('"status":"confirmed"', markup)
+
+    def test_corrupted_ledger_prevents_html_generation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "ledger"
+            decision = apply(
+                self.data, ledger, target_id=self.data["logical_elements"][0]["logical_id"],
+                status="confirmed", reviewer="nina", reason="checked",
+            )
+            (ledger / (decision["decision_id"] + ".json")).write_text(
+                "invalid json", encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "Unparseable"):
+                make_html(self.data, page_number=1, png_bytes=dummy_png(),
+                          image_name="page1.png", ledger_dir=ledger)
+
+    def test_ledger_only_displays_current_page_decision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "ledger"
+            target = self.data["logical_elements"][0]["logical_id"]
+            other = self.data["physical_regions"][0]["region_id"]
+            apply(self.data, ledger, target_id=target, status="confirmed",
+                  reviewer="nina", reason="confirmed")
+            # Deciding another on-page region is also reported.
+            apply(self.data, ledger, target_id=other, status="rejected",
+                  reviewer="nina", reason="wrong detection")
+            markup = make_html(self.data, page_number=1, png_bytes=dummy_png(),
+                               image_name="page1.png", ledger_dir=ledger)
+            self.assertIn('"status":"confirmed"', markup)
+            self.assertIn('"status":"rejected"', markup)
 
     def test_unrelated_document_page_data_not_leaked(self):
         result = page_review_data(self.data, page_number=1,

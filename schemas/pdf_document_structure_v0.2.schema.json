@@ -1,0 +1,374 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Retro-RAG PDF document structure v0.2",
+  "description": "Immutable embedded v0.1 snapshot plus additive unapproved region/logic/review observations; semantic checks in validator.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_v01",
+    "source_v01_sha256",
+    "physical_regions",
+    "logical_elements",
+    "relationships_v02",
+    "review_decisions",
+    "processing_runs",
+    "quality_v02"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.2"
+    },
+    "source_v01": {
+      "type": "object",
+      "description": "Exact v0.1 JSON object; validated against v0.1 schema and references independently."
+    },
+    "source_v01_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "physical_regions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/region"
+      }
+    },
+    "logical_elements": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/logical"
+      }
+    },
+    "relationships_v02": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/relation"
+      }
+    },
+    "review_decisions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/decision"
+      }
+    },
+    "processing_runs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/run"
+      }
+    },
+    "quality_v02": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "notes"
+      ],
+      "properties": {
+        "status": {
+          "const": "unreviewed"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "bbox": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "items": false,
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "proposed",
+            "unclear",
+            "confirmed",
+            "rejected"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "run_id"
+      ],
+      "properties": {
+        "method": {
+          "enum": [
+            "pymupdf",
+            "doclayout_yolo",
+            "pdf_caption",
+            "pdf_outline",
+            "manual",
+            "other"
+          ]
+        },
+        "run_id": {
+          "$ref": "#/$defs/id"
+        },
+        "detector_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pymupdf_table_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source_span_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/id"
+          }
+        },
+        "raw_text": {
+          "type": "string"
+        },
+        "model_confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "region": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "region_id",
+        "page_number",
+        "bbox_pt",
+        "region_kind",
+        "evidence",
+        "review"
+      ],
+      "properties": {
+        "region_id": {
+          "$ref": "#/$defs/id"
+        },
+        "page_number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "bbox_pt": {
+          "$ref": "#/$defs/bbox"
+        },
+        "region_kind": {
+          "enum": [
+            "table",
+            "figure",
+            "caption",
+            "diagram",
+            "other"
+          ]
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidence"
+        },
+        "raw_cells": {
+          "type": "array",
+          "description": "Exact unmodified PyMuPDF matrix; null or string values allowed.",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "review": {
+          "$ref": "#/$defs/review"
+        }
+      }
+    },
+    "logical": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "logical_id",
+        "element_kind",
+        "label",
+        "review"
+      ],
+      "properties": {
+        "logical_id": {
+          "$ref": "#/$defs/id"
+        },
+        "element_kind": {
+          "enum": [
+            "table",
+            "figure",
+            "diagram",
+            "heading",
+            "other"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "review": {
+          "$ref": "#/$defs/review"
+        }
+      }
+    },
+    "relation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "relation_id",
+        "from_id",
+        "to_id",
+        "relation_type",
+        "review"
+      ],
+      "properties": {
+        "relation_id": {
+          "$ref": "#/$defs/id"
+        },
+        "from_id": {
+          "$ref": "#/$defs/id"
+        },
+        "to_id": {
+          "$ref": "#/$defs/id"
+        },
+        "relation_type": {
+          "enum": [
+            "has_region",
+            "has_caption",
+            "contains",
+            "continues_in",
+            "derived_from",
+            "conflicts_with",
+            "references",
+            "possible_same_table"
+          ]
+        },
+        "review": {
+          "$ref": "#/$defs/review"
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision_id",
+        "target_id",
+        "status",
+        "reviewer",
+        "decided_at",
+        "reason",
+        "document_sha256"
+      ],
+      "properties": {
+        "decision_id": {
+          "$ref": "#/$defs/id"
+        },
+        "target_id": {
+          "$ref": "#/$defs/id"
+        },
+        "status": {
+          "enum": [
+            "confirmed",
+            "rejected"
+          ]
+        },
+        "reviewer": {
+          "$ref": "#/$defs/id"
+        },
+        "decided_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "document_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "supersedes_decision_id": {
+          "$ref": "#/$defs/id"
+        }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "method",
+        "source_sha256",
+        "parameters"
+      ],
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/id"
+        },
+        "method": {
+          "enum": [
+            "pymupdf",
+            "doclayout_yolo",
+            "pdf_caption",
+            "pdf_outline",
+            "manual",
+            "other"
+          ]
+        },
+        "source_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "tool_version": {
+          "type": "string"
+        },
+        "parameters": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

@@ -74,7 +74,7 @@ def validate_contract(manifest):
             used_ids.add(uid)
         if unit["unit_kind"] not in UNIT_KINDS:
             errors.append(f"{prefix}: unsupported unit_kind")
-        if not isinstance(unit["content"], str) or not unit["content"].strip():
+        if not isinstance(unit["content"], str) or not unit["content"]:
             errors.append(f"{prefix}: missing content")
         elif unit["content_sha256"] != hashlib.sha256(
             unit["content"].encode("utf-8")

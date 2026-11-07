@@ -121,3 +121,49 @@ def from_markdown_source(raw, *, source_uri, source_id):
             "frontmatter_sha256": canonical_sha256(meta),
         },
     }])
+
+
+def main():
+    """Local preview conversion only; never fetches URLs or touches databases."""
+    import argparse
+    import json
+    from pathlib import Path
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--pdf-audit", type=Path)
+    source.add_argument("--markdown-file", type=Path)
+    parser.add_argument("--source-uri", required=True)
+    parser.add_argument("--source-id", required=True)
+    parser.add_argument("--title", help="Required for PDF audit")
+    parser.add_argument("--out", type=Path, required=True)
+    args = parser.parse_args()
+
+    src = args.pdf_audit if args.pdf_audit else args.markdown_file
+    if args.out.resolve() == src.resolve():
+        parser.error("Refusing to overwrite the original source")
+    if args.pdf_audit:
+        if not args.title or not args.title.strip():
+            parser.error("--title is required for --pdf-audit")
+        audit = json.loads(args.pdf_audit.read_text(encoding="utf-8"))
+        result = from_pdf_audit_manifest(
+            audit, source_uri=args.source_uri,
+            source_id=args.source_id, title=args.title,
+        )
+    else:
+        result = from_markdown_source(
+            args.markdown_file.read_bytes(),
+            source_uri=args.source_uri, source_id=args.source_id,
+        )
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+                        encoding="utf-8")
+    print("Contract:", result["contract_version"])
+    print("Format:", result["document"]["format"])
+    print("Proposed units:", len(result["units"]))
+    print("Indexing allowed:", result["indexing"]["allowed"])
+    print("Preview written to:", args.out)
+
+
+if __name__ == "__main__":
+    main()
